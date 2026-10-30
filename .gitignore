@@ -1,0 +1,5 @@
+build/
+proof/
+inputs/*
+!inputs/README.md
+.DS_Store
