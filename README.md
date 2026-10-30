@@ -107,9 +107,12 @@ sintéticas, 600 frames por câmera:
 | Prova | Resultado |
 |---|---|
 | Offline, bit-exact | 4/4 câmeras, 600/600 frames idênticos |
-| Controle negativo | cam1 10/600, cam2 10/600, cam3 13/600, cam4 139/600 |
+| Controle negativo | cam1 10/600, cam2 10/600, cam3 10–13/600, cam4 139/600 |
 | Ao vivo, decoders | sem merge **4**, com merge **1** (e 2 vs 1 com `CAMS=1,4`) |
-| Ao vivo, bit-exact | 4/4 posições, 624/624 frames idênticos |
+| Ao vivo, bit-exact | 4/4 posições, 100% dos frames (624 e 648 frames em duas rodadas) |
+
+Os relatórios dessa rodada estão em [`docs/rodada-referencia/`](docs/rodada-referencia/),
+para comparar com o que sair no seu Mac.
 
 **Ainda não rodado no Mac.** No Apple Silicon espero o `vtbdec` no lugar do
 `ffdec` no grafo. Se o VideoToolbox recusar o bitstream com tiles, o GPAC cai
