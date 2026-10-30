@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multiview HEVC · 1 decoder</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>Multiview HEVC <span class="dim">· tiles · Shaka Player</span></h1>
+    <p class="sub">4 câmeras ao vivo, costuradas no navegador, decodificadas por <strong>um</strong> decoder.</p>
+  </div>
+  <div class="pills" id="pills"></div>
+</header>
+
+<div class="banner" id="banner" hidden></div>
+
+<section class="controls">
+  <div class="seg" role="tablist" aria-label="Modo">
+    <button class="on" data-mode="merge" role="tab">Multiview · 1 decoder</button>
+    <button data-mode="compare" role="tab">Comparação · 1 player por câmera</button>
+  </div>
+  <div class="seg" id="layoutCtl" aria-label="Layout">
+    <button class="on" data-layout="grid">Grade</button>
+    <button data-layout="focus">Destaque</button>
+    <button data-layout="raw">Frame decodificado</button>
+  </div>
+  <label class="sel">Câmeras
+    <select id="cams">
+      <option value="1,2,3,4">1, 2, 3, 4</option>
+      <option value="1,2">1 e 2</option>
+      <option value="3,4">3 e 4</option>
+      <option value="1,4">1 e 4</option>
+    </select>
+  </label>
+</section>
+
+<main class="layout">
+  <section class="stage" id="stage">
+    <canvas id="canvas" aria-label="Mosaico das câmeras"></canvas>
+    <div class="compare" id="compare" hidden></div>
+    <figure class="inset" id="inset">
+      <video id="video" muted playsinline></video>
+      <figcaption>o que o decoder entrega: <span id="decodedRes">—</span></figcaption>
+    </figure>
+    <p class="hint" id="hint">No modo Destaque, clique numa câmera para trazê-la para o quadro principal.</p>
+  </section>
+
+  <aside class="panel">
+    <h2>Decode</h2>
+    <dl class="kv" id="kvDecode"></dl>
+    <h2>Merge no cliente</h2>
+    <dl class="kv" id="kvMerge"></dl>
+    <h2>Eventos</h2>
+    <ol class="log" id="log"></ol>
+    <details class="how">
+      <summary>Como confirmar o número de decoders</summary>
+      <p><strong>Chrome:</strong> abra <code>chrome://media-internals</code>. Cada player aparece numa aba; no modo Multiview há <em>um</em> player de vídeo HEVC com resolução do canvas, no modo Comparação há um por câmera.</p>
+      <p><strong>Safari:</strong> Desenvolver › Mostrar Inspetor Web › aba Mídia (ou o console: <code>document.querySelectorAll('video').length</code>).</p>
+      <p><strong>Monitor de Atividade:</strong> compare CPU/GPU do processo de vídeo do navegador entre os dois modos.</p>
+    </details>
+  </aside>
+</main>
+
+<script src="vendor/shaka-player.dash.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>

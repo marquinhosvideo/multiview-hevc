@@ -4,11 +4,16 @@
 # idênticos, bit a bit, a frames da câmera original. Como o servidor roda em
 # loop e o cliente entra no meio, a comparação é por pertencimento ao conjunto
 # de frames da câmera (e descobre sozinha qual câmera ficou em qual posição).
+#
+# uso: 08_verify_live.sh [arquivo] [nome-do-relatório] [título]
+#   (padrão: build/live_merged.hevc, gravado pelo cliente GPAC)
 source "$(dirname "$0")/lib.sh"
 need ffmpeg; need ffprobe
 
-L="$BUILD/live_merged.hevc"
-[ -s "$L" ] || die "build/live_merged.hevc não existe. Rode: make live-record (com o servidor ligado)"
+L="${1:-$BUILD/live_merged.hevc}"
+NAME="${2:-live_report}"
+TITLE="${3:-o bitstream mergeado no cliente (GPAC) reconstrói as câmeras}"
+[ -s "$L" ] || die "$(basename "$L") não existe. Rode: make live-record (com o servidor ligado)"
 
 W=$(ffprobe -v error -select_streams v -show_entries stream=width -of csv=p=0 "$L")
 H=$(ffprobe -v error -select_streams v -show_entries stream=height -of csv=p=0 "$L")
@@ -16,9 +21,9 @@ cols=$(( W / TILE_W )); rows=$(( H / TILE_H ))
 
 for n in 1 2 3 4; do frame_md5s "$BUILD/cam$n.hevc" | sort -u > "$BUILD/.set$n"; done
 
-R="$PROOF/live_report.md"
+R="$PROOF/$NAME.md"
 {
-  echo "# Prova ao vivo: o bitstream mergeado no cliente reconstrói as câmeras"
+  echo "# Prova ao vivo: $TITLE"
   echo
   echo "Gerado em $(date '+%Y-%m-%d %H:%M:%S'). Gravação: ${W}x${H}, $(ffprobe -v error -count_frames -select_streams v -show_entries stream=nb_read_frames -of csv=p=0 "$L") frames, decodificada uma única vez."
   echo
@@ -43,11 +48,11 @@ for r in $(seq 0 $((rows - 1))); do
   done
 done
 
-ffmpeg -v error -y -i "$L" -vf "select=eq(n\,60),scale=1280:-2" -frames:v 1 "$PROOF/live_frame.png" || true
+ffmpeg -v error -y -i "$L" -vf "select=eq(n\,60),scale=1280:-2" -frames:v 1 "$PROOF/${NAME%_report}_frame.png" || true
 echo >> "$R"
 if [ $all_ok -eq 1 ]; then
   echo "**Resultado: PASSOU.** Todos os frames de todas as posições batem bit a bit com a câmera de origem." >> "$R"
-  ok "PASSOU. Relatório: proof/live_report.md"
+  ok "PASSOU. Relatório: proof/$NAME.md"
 else
-  echo "**Resultado: FALHOU.**" >> "$R"; die "FALHOU: veja proof/live_report.md"
+  echo "**Resultado: FALHOU.**" >> "$R"; die "FALHOU: veja proof/$NAME.md"
 fi

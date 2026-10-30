@@ -2,7 +2,7 @@ SHELL := /bin/bash
 S := ./scripts
 
 .PHONY: help deps check sources encode merge verify offline control \
-        live-server live-play live-proof live-record verify-live open clean distclean
+        live-server live-play live-proof live-record verify-live web web-test open clean distclean
 
 help:
 	@echo "POC multiview HEVC com tiles: 4 câmeras, 1 decode"
@@ -18,6 +18,9 @@ help:
 	@echo "  make live-proof    [terminal 2] conta decoders COM e SEM merge (relatório)"
 	@echo "  make live-record   [terminal 2] grava 20s do bitstream mergeado ao vivo"
 	@echo "  make verify-live   confere a gravação bit a bit contra as fontes"
+	@echo ""
+	@echo "  make web           [terminal 2] player web com Shaka: merge no navegador + 1 decoder"
+	@echo "  make web-test      testa o player web sem navegador (Node): merge JS, plugin do Shaka, página"
 	@echo ""
 	@echo "  Variáveis úteis: CAMS=1,4  BITRATE=4000000  CLIP_SECONDS=30  LIVE_PORT=8080"
 
@@ -40,6 +43,8 @@ live-play:   ; @$(S)/06_live_client.sh play 60
 live-proof:  ; @$(S)/06_live_client.sh proof 15
 live-record: ; @$(S)/06_live_client.sh record 20
 verify-live: ; @$(S)/08_verify_live.sh
+web:         ; @$(S)/09_web.sh
+web-test:    ; @$(S)/10_web_test.sh
 
 clean:
 	rm -rf build proof

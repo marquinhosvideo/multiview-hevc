@@ -19,6 +19,7 @@ vetores de movimento restritos) e [GPAC](https://github.com/gpac/gpac)
 | 3 | As restrições de encoding são necessárias? | Controle negativo: sem elas, só 10 a 139 de 600 frames sobrevivem ao merge | `make control` |
 | 4 | Funciona ao vivo, com o merge no cliente? | Servidor DASH ao vivo + cliente que conta instâncias de decoder: **4 sem merge, 1 com merge** | `make live-proof` |
 | 5 | O que o cliente ao vivo decodifica está correto? | Gravação do bitstream mergeado ao vivo, conferida bit a bit contra as fontes | `make live-record verify-live` |
+| 6 | Funciona num player web de mercado? | **Shaka Player** numa página local: o merge roda em JavaScript dentro do navegador e o Shaka entrega 1 stream a 1 `SourceBuffer` | `make web` / `make web-test` |
 
 Os relatórios ficam em `proof/` (Markdown + PNG).
 
@@ -98,6 +99,59 @@ para **um** decoder:
 
 Sem o `hevcmerge`, o mesmo grafo mostra quatro decoders, um por câmera.
 
+### 4. Player web com Shaka (merge no navegador)
+
+```bash
+# terminal 1
+make live-server
+
+# terminal 2
+make web        # abre http://127.0.0.1:8081/index.html no navegador padrão
+```
+
+Use **Safari** ou **Chrome** no Mac (os dois tocam HEVC via MSE usando o
+VideoToolbox). O Firefox normalmente não toca HEVC; a página avisa se o
+navegador não suportar.
+
+**Como funciona.** O Shaka Player 5.3.3 roda sem nenhuma modificação. A página
+registra um esquema de rede `mv://` no `NetworkingEngine` do Shaka
+(`web/mv-shaka.js`):
+
+```
+Shaka pede                          o plugin mv:// faz
+──────────────────────────────────  ──────────────────────────────────────────────
+mv://manifest/merge?cams=1,2,3,4    baixa o live.mpd real e devolve um MPD com
+                                    UMA representação 2048x1152 apontando p/ mv://seg/
+mv://seg/init.mp4                   baixa os 4 inits e gera o init do canvas
+                                    (SPS 2048x1152, PPS com 4 tiles)
+mv://seg/123.m4s                    baixa o segmento 123 das 4 câmeras, costura
+                                    em JavaScript (web/hevc-merge.js) e devolve 1
+```
+
+Para o Shaka e para o MSE existe um único stream de vídeo: um `SourceBuffer`,
+uma sessão de decoder. Se uma câmera ainda não publicou o segmento, o plugin
+devolve um erro HTTP recuperável e o Shaka tenta de novo, como faria com um 404.
+
+**Na página:**
+
+- **Multiview · 1 decoder**: o mosaico é desenhado num `<canvas>` a partir do
+  único `<video>`. O quadro pequeno no canto mostra o que o decoder realmente
+  entrega: um frame 2048x1152.
+- **Layouts**: *Grade*, *Destaque* (clique numa câmera para trazê-la ao quadro
+  principal: só o render muda, nada é baixado ou decodificado de novo) e
+  *Frame decodificado* (o canvas cru, com as bordas dos tiles marcadas).
+- **Comparação · 1 player por câmera**: mesmo conteúdo, sem merge, com um
+  player Shaka e um `<video>` por câmera. É o contraponto para comparar CPU,
+  GPU e o `chrome://media-internals`.
+- **Câmeras**: 4 câmeras ou pares (1 e 2, 3 e 4, 1 e 4).
+- Painel com players, streams no MSE, resolução decodificada, frames
+  decodificados/descartados, latência ao vivo e tempo de merge por segmento.
+
+`make web-test` valida o player web sem navegador, com Node 18+
+(`brew install node`): roda o merge em JavaScript e o plugin do Shaka contra o
+servidor ao vivo e confere o resultado bit a bit, e testa a página em jsdom com
+um Shaka simulado.
+
 ## Resultados de referência
 
 Rodada completa feita antes da entrega, em Linux x86_64 (Ubuntu 24.04, Kvazaar
@@ -110,14 +164,23 @@ sintéticas, 600 frames por câmera:
 | Controle negativo | cam1 10/600, cam2 10/600, cam3 10–13/600, cam4 139/600 |
 | Ao vivo, decoders | sem merge **4**, com merge **1** (e 2 vs 1 com `CAMS=1,4`) |
 | Ao vivo, bit-exact | 4/4 posições, 100% dos frames (624 e 648 frames em duas rodadas) |
+| Merge em JavaScript, bit-exact | 4/4 câmeras, 300/300 frames; 2/2 câmeras com o par 2 e 3 |
+| Plugin `mv://` do Shaka, bit-exact | 4/4 câmeras, 240/240 frames; 404 vira erro recuperável |
+| Custo do merge em JavaScript (Node) | ~20 a 60 ms por segmento de 2 s com 4 câmeras |
 
 Os relatórios dessa rodada estão em [`docs/rodada-referencia/`](docs/rodada-referencia/),
 para comparar com o que sair no seu Mac.
 
-**Ainda não rodado no Mac.** No Apple Silicon espero o `vtbdec` no lugar do
-`ffdec` no grafo. Se o VideoToolbox recusar o bitstream com tiles, o GPAC cai
-para software e a prova de "1 decoder" continua valendo, mas aí o ponto de
-hardware fica em aberto e vale registrar.
+**Ainda não rodado no Mac nem num navegador de verdade.** O ambiente onde montei
+a POC não tinha navegador, então o playback no Shaka foi validado até a porta do
+MSE: o segmento que o plugin entrega ao Shaka é bit-exact, e a página foi
+testada com um Shaka simulado. O que falta confirmar no seu Mac:
+
+1. Safari e Chrome aceitam o canvas HEVC com tiles no MSE e tocam liso.
+2. No GPAC, o grafo mostra `vtbdec` (VideoToolbox) no lugar do `ffdec`.
+
+Se o VideoToolbox recusar tiles, esse é o achado mais importante da Fase 1 do
+plano.
 
 ## O que aprendemos (resumo)
 
@@ -132,11 +195,14 @@ Detalhes e evidências em [`docs/APRENDIZADOS.md`](docs/APRENDIZADOS.md).
 
 ## Limitações (de propósito)
 
-- O "player" aqui é o GPAC. Ele prova a técnica; não é um player de produção.
-  Integrar em web (MSE), Android (Media3/MediaCodec) e iOS/tvOS (VideoToolbox) é
-  a próxima fase ([`docs/PLANO.md`](docs/PLANO.md)).
-- O canvas é exibido como está. Layout livre na tela (redimensionar, trocar a
-  principal) é trabalho do renderizador, depois do decode.
+- Há dois players: o GPAC (prova técnica, conta decoders) e o Shaka na página
+  web. Android (Media3/MediaCodec) e iOS/tvOS (VideoToolbox) ficam para a
+  próxima fase ([`docs/PLANO.md`](docs/PLANO.md)).
+- O merge em JavaScript implementa só o contrato desta POC: grade de 2 ou 4
+  câmeras do mesmo tamanho, 1 slice por quadro, mesmos SPS/PPS, sem WPP. Fora
+  disso ele recusa com uma mensagem clara, em vez de gerar vídeo corrompido.
+- No player web, o layout é desenhado num `<canvas>` (2D). Em produção, WebGL ou
+  o próprio compositor do player seriam mais eficientes.
 - Tiles de mesmo tamanho. Mosaico "1 grande + 3 pequenos" exige encodar cada
   câmera em mais de uma resolução, o que é o próximo passo natural.
 - O servidor faz loop de arquivos já codificados (contribuição simulada). O
@@ -156,7 +222,14 @@ scripts/04_verify.sh        prova offline bit-exact
 scripts/05_live_server.sh   servidor DASH ao vivo (GPAC)
 scripts/06_live_client.sh   cliente: play | proof | record
 scripts/07_negative_control.sh  controle negativo
-scripts/08_verify_live.sh   prova bit-exact da gravação ao vivo
+scripts/08_verify_live.sh   prova bit-exact da gravação ao vivo (ou de qualquer MP4/HEVC mergeado)
+scripts/09_web.sh           serve a página do player web e abre o navegador
+scripts/10_web_test.sh      testes do player web sem navegador
+web/index.html, app.js      página: Shaka, modos, layouts, painel
+web/mv-shaka.js             plugin mv:// do Shaka + reescrita do MPD
+web/hevc-merge.js           merge HEVC em JavaScript (SPS/PPS/slice header + fMP4)
+web/vendor/                 Shaka Player 5.3.3 (dash build) e licença
+tools/                      testes em Node (merge, plugin, página em jsdom)
 docs/PLANO.md               plano em fases até produção
 docs/APRENDIZADOS.md        restrições descobertas, com evidência
 ```
@@ -166,5 +239,6 @@ docs/APRENDIZADOS.md        restrições descobertas, com evidência
 - GPAC, [HEVC Tile based adaptation guide](https://wiki.gpac.io/Howtos/dash/HEVC-Tile-based-adaptation-guide/) e [hevcmerge](https://wiki.gpac.io/Filters/hevcmerge/)
 - Kvazaar, [ultravideo/kvazaar](https://github.com/ultravideo/kvazaar)
 - Fraunhofer HHI, [omaf.js](https://github.com/hellge/omaf.js): merge de tiles HEVC em JavaScript para MSE
+- Shaka Player, [shaka-project/shaka-player](https://github.com/shaka-project/shaka-player) (plugins de rede via `NetworkingEngine.registerScheme`)
 - Nokia, [Multiview live streaming with VVC](https://www.nokia.com/blog/be-your-own-director-multiview-live-streaming-with-vvc/)
 - MediaKind, [Multiview streaming](https://www.mediakind.com/?p=14725) (integração com a Tiledmedia)

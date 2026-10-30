@@ -21,6 +21,8 @@ resultado bit a bit idêntico, ao vivo via DASH. Ver `README.md` e `proof/`.
 | `make open` (QuickTime) | Toca liso, 4 câmeras sincronizadas |
 | `make live-play` | Grafo mostra `vtbdec` x1 |
 | `make live-proof` | 4 decoders sem merge, 1 com merge |
+| `make web` no Safari e no Chrome | Mosaico toca liso; painel mostra 1 player e 2048x1152 decodificado; `chrome://media-internals` mostra 1 player |
+| Modo Comparação na página | Registrar CPU/GPU com 4 players vs 1 (Monitor de Atividade) |
 | Monitor de Atividade durante `live-play` com e sem merge | Registrar CPU do processo `gpac` |
 
 Se o `vtbdec` não aparecer ou falhar, é o primeiro sinal de risco de
@@ -55,14 +57,19 @@ recortar na renderização. O que muda é onde dá para "entrar" antes do decode
 
 | Plataforma | Onde entra o merge | Referência | Risco principal |
 |---|---|---|---|
-| Web / Safari / Tizen / webOS | JS ou WASM antes do `SourceBuffer` (MSE) | [omaf.js (Fraunhofer HHI)](https://github.com/hellge/omaf.js) | Suporte a HEVC no MSE e a tiles no decoder da TV |
+| Web / Safari / Tizen / webOS | **Já iniciado nesta POC:** plugin `mv://` no `NetworkingEngine` do Shaka, merge em JS antes do `SourceBuffer` | `web/mv-shaka.js`, `web/hevc-merge.js`; [omaf.js](https://github.com/hellge/omaf.js) | Suporte a HEVC no MSE e a tiles no decoder da TV |
 | Android / Android TV | Renderer customizado no Media3 alimentando o `MediaCodec` | `hevcmerge` portado (C via JNI) | Variação de decoder entre fabricantes de SoC |
 | iOS / tvOS | `VTDecompressionSession` + `AVSampleBufferDisplayLayer` (o `AVPlayer` não serve) | idem | Perder o que o AVPlayer dá de graça (AirPlay, PiP, legendas) |
 | Roku / LG em C | Depende de acesso ao decoder abaixo do player nativo | — | Provavelmente inviável; candidatos a multiview server-side |
 
-Recomendação de ordem: **Web (Safari) primeiro**, porque a referência aberta já
-existe e o ciclo de teste é rápido; depois **Android TV**, que é onde o limite de
-decoders mais dói.
+Recomendação de ordem: **Web primeiro**, que já tem o esqueleto funcionando no
+Shaka; o próximo passo natural é rodar a mesma página no navegador de uma TV
+Tizen ou webOS, onde o limite de decoders é real. Depois **Android TV**.
+
+O padrão do plugin de rede vale fora do Shaka também: qualquer player que deixe
+interceptar o download de segmentos e devolver bytes próprios pode receber o
+mesmo `hevc-merge.js` (no hls.js, um `loader` customizado; no dash.js, avaliar
+os pontos de extensão de request/response da versão em uso).
 
 ## Fase 4: decisão
 

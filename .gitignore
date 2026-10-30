@@ -3,3 +3,5 @@ proof/
 inputs/*
 !inputs/README.md
 .DS_Store
+tools/node_modules/
+tools/package-lock.json

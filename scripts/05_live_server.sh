@@ -22,11 +22,13 @@ done
 
 URL="http://127.0.0.1:${LIVE_PORT}/live.mpd"
 log "Servidor ao vivo em $URL  (segmentos de ${SEG_DUR}s, Ctrl+C para parar)"
-log "Em outro terminal: make live-client"
+log "Player web (Shaka): http://127.0.0.1:${LIVE_PORT}/index.html"
+log "Player GPAC, em outro terminal: make live-play"
 
 # reframer:rt=on  -> entrega os frames no ritmo do relógio (simula o ao vivo)
 # dasher dynamic  -> MPD type=dynamic, segmentos numerados por tempo
-# httpout         -> o próprio GPAC serve o MPD e os segmentos
+# httpout         -> o próprio GPAC serve o MPD, os segmentos e a página web/
+#                    (mesma origem: o Shaka não precisa de CORS)
 exec gpac "${args[@]}" \
   "reframer:rt=on:SID=$sids:FID=rt" \
-  -o "$URL:SID=rt:dmode=dynamic:segdur=${SEG_DUR}:profile=live:tsb=${LIVE_TSB}:template=\$Representation\$/seg_\$Number\$:rdirs=$LIVE_DIR"
+  -o "$URL:SID=rt:dmode=dynamic:segdur=${SEG_DUR}:profile=live:tsb=${LIVE_TSB}:template=\$Representation\$/seg_\$Number\$:rdirs=$LIVE_DIR,$ROOT/web"
