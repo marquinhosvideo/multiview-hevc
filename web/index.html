@@ -50,15 +50,15 @@
   <form id="sourceForm">
     <div class="seg" id="sourceKind" aria-label="Tipo de fonte">
       <button type="button" class="on" data-source="dash">DASH (make live-server)</button>
-      <button type="button" data-source="hls">4 streams HLS</button>
+      <button type="button" data-source="hls">4 streams HLS/DASH</button>
     </div>
     <div class="hlsurls" id="hlsUrls" hidden>
-      <label>CAM 1 <input type="url" name="hls1" placeholder="https://.../cam1/index.m3u8" spellcheck="false"></label>
-      <label>CAM 2 <input type="url" name="hls2" placeholder="https://.../cam2/index.m3u8" spellcheck="false"></label>
-      <label>CAM 3 <input type="url" name="hls3" placeholder="https://.../cam3/index.m3u8" spellcheck="false"></label>
-      <label>CAM 4 <input type="url" name="hls4" placeholder="https://.../cam4/index.m3u8" spellcheck="false"></label>
+      <label>CAM 1 <input type="url" name="hls1" placeholder="https://.../canal1.m3u8 ou .mpd" spellcheck="false"></label>
+      <label>CAM 2 <input type="url" name="hls2" placeholder="https://.../canal2.m3u8 ou .mpd" spellcheck="false"></label>
+      <label>CAM 3 <input type="url" name="hls3" placeholder="https://.../canal3.m3u8 ou .mpd" spellcheck="false"></label>
+      <label>CAM 4 <input type="url" name="hls4" placeholder="https://.../canal4.m3u8 ou .mpd" spellcheck="false"></label>
       <label class="chk"><input type="checkbox" id="proxyChk"> <span>Passar pelo servidor local <small>(contorna CORS; só com <code>make web</code>)</small></span></label>
-      <p class="note">Mais cômodo: <a href="hls.html">página de entrada HLS</a>, que também verifica os streams. Playlist de mídia ou master (usa a variante HEVC de maior banda), segmentos fMP4 ou MPEG-TS. O servidor precisa liberar CORS. Antes de tocar, confira com <code>make check-hls</code>.</p>
+      <p class="note">Mais cômodo: <a href="hls.html">página de entrada HLS</a>, que também verifica os streams. Cada campo aceita playlist HLS (mídia ou master; usa a variante HEVC de maior banda) ou manifesto DASH (.mpd), com segmentos fMP4 ou, no HLS, MPEG-TS. O servidor precisa liberar CORS. Antes de tocar, confira com <code>make check-hls</code>.</p>
     </div>
     <button type="submit" class="btn">Carregar</button>
   </form>

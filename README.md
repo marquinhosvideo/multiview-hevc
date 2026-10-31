@@ -156,9 +156,14 @@ devolve um erro HTTP recuperável e o Shaka tenta de novo, como faria com um 404
 servidor ao vivo e confere o resultado bit a bit, e testa a página em jsdom com
 um Shaka simulado.
 
-### 5. Fonte HLS (4 streams `.m3u8`, por exemplo de um Elemental Live)
+### 5. Fonte HLS ou DASH (4 manifestos `.m3u8` / `.mpd`, por exemplo de um Elemental Live)
 
-O player web aceita **4 playlists HLS, uma por câmera**, no lugar do DASH do GPAC.
+O player web aceita **4 manifestos, um por canal, cada um HLS (`.m3u8`) ou DASH
+(`.mpd`), em qualquer mistura**, no lugar do DASH de 4 AdaptationSets do GPAC. O
+formato é detectado pelo conteúdo, não pela extensão. No DASH: um `<MPD>` por canal
+com `SegmentTemplate` (com `SegmentTimeline` ou `@duration`), estático ou dinâmico,
+segmentos fMP4/CMAF e `BaseURL` em qualquer nível. Não suporta `SegmentList`,
+`SegmentBase` (arquivo único) nem vários `Period` num MPD estático.
 Segmentos **fMP4/CMAF** ou **MPEG-TS** (o TS é remuxado para fMP4 em JavaScript,
 sem recodificar), playlist de mídia ou master (usa a variante HEVC de maior
 banda), ao vivo ou VOD. O Shaka continua sem modificação: o plugin `mv://` lê as

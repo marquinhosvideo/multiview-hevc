@@ -10,6 +10,7 @@
 import { createMerger, gridFor, initTimescale, firstDecodeTime, initCodecString, parseCameraInit } from './hevc-merge.js';
 import { isMasterPlaylist, parseMaster, pickVariant, parseMedia, alignSlots, independentOffsets } from './hls.js';
 import { looksLikeTs, tsInit, tsToFragment } from './ts-remux.js';
+import { isMpd, parseMpd } from './dash.js';
 
 const td = new TextDecoder();
 const httpErr = (status, url) => Object.assign(new Error(`HTTP ${status} em ${url}`), { status, url });
@@ -28,10 +29,16 @@ function makeCache(fetchBytes, max = 24) {
 
 // Uma câmera HLS: resolve master -> media, init e conversão TS -> fMP4.
 function makeCamera(index, url, io) {
-  const cam = { index, url, mediaUrl: null, playlist: null, init: null, timescale: 90000, container: null, seq: 0 };
+  const cam = { index, url, mediaUrl: null, playlist: null, init: null, timescale: 90000, container: null, seq: 0, dashSeq: new Map() };
 
+  // Aceita playlist HLS (media ou master) e manifesto DASH (.mpd), sem depender da extensão.
   cam.load = async () => {
     let text = td.decode(await io.fetchBytes(cam.mediaUrl || cam.url));
+    if (isMpd(text)) {
+      cam.mediaUrl = cam.url;
+      cam.playlist = parseMpd(text, cam.url, { seqState: cam.dashSeq });
+      return cam.playlist;
+    }
     if (isMasterPlaylist(text)) {
       cam.mediaUrl = pickVariant(parseMaster(text, cam.url)).uri;
       text = td.decode(await io.fetchBytes(cam.mediaUrl));

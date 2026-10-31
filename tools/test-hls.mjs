@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join, extname } from 'node:path';
 import { createMultiviewScheme, fetchBytes } from '../web/mv-shaka.js';
 import { parseMedia, parseMaster, alignSlots } from '../web/hls.js';
+import { parseMpd } from '../web/dash.js';
 
 const W = 1024, H = 576, SECONDS = 6;
 const work = mkdtempSync(join(tmpdir(), 'mv-hls-'));
@@ -47,6 +48,16 @@ for (const kind of ['fmp4', 'ts']) {
     let i = 0;
     writeFileSync(f, readFileSync(f, 'utf8').replace(/#EXT-X-PROGRAM-DATE-TIME:.*/g, () => `#EXT-X-PROGRAM-DATE-TIME:${new Date(T0 + 2000 * i++).toISOString()}`));
   }
+}
+// Manifestos DASH (.mpd) para os mesmos segmentos fMP4: um com SegmentTimeline, outro com @duration.
+const mpd = (tpl) => `<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT${SECONDS}S" profiles="urn:mpeg:dash:profile:isoff-live:2011">
+ <Period><AdaptationSet contentType="video" mimeType="video/mp4"><Representation id="v1" codecs="hvc1.4.10.L93.9F.A8" width="${W}" height="${H}" bandwidth="2500000">${tpl}</Representation></AdaptationSet></Period>
+</MPD>`;
+for (let n = 1; n <= 4; n++) {
+  const d = join(work, 'fmp4', `cam${n}`);
+  writeFileSync(join(d, 'manifest.mpd'), mpd(`<SegmentTemplate timescale="1000" initialization="init.mp4" media="seg_$Number$.m4s" startNumber="0"><SegmentTimeline><S t="0" d="2000" r="${SECONDS / 2 - 1}"/></SegmentTimeline></SegmentTemplate>`));
+  writeFileSync(join(d, 'manifest_dur.mpd'), mpd(`<SegmentTemplate timescale="1000" duration="2000" initialization="init.mp4" media="seg_$Number$.m4s" startNumber="0"/>`));
 }
 // Streams independentes: origem de PTS, numeração de segmentos e relógio (PDT) diferentes em cada câmera.
 for (let n = 1; n <= 4; n++) {
@@ -153,6 +164,29 @@ check(r4.events.some((e) => e.type === 'manifest' && e.info.containers.every((c)
   catch (e) { check(/desalinhada no tempo/.test(String(e.data && e.data[1] && e.data[1].message)), 'modo estrito recusa relógios diferentes com mensagem clara'); }
 }
 await run('HLS misto fMP4 + TS, modo independente (fragmentação diferente)', [`${base}/fmp4/cam1/index.m3u8`, `${base}/fmp4/cam2/index.m3u8`, `${base}/fmp4/cam3/index.m3u8`, `${base}/ts/cam4/index.m3u8`], { sync: 'independent' });
+
+// DASH como fonte: SegmentTimeline, @duration e mistura HLS + DASH.
+await run('DASH (SegmentTimeline)', urls('fmp4', 'manifest.mpd'));
+await run('DASH (@duration)', urls('fmp4', 'manifest_dur.mpd'));
+await run('HLS + DASH misturados', [`${base}/fmp4/cam1/index.m3u8`, `${base}/fmp4/cam2/manifest.mpd`, `${base}/fmp4/cam3/index.m3u8`, `${base}/fmp4/cam4/manifest_dur.mpd`]);
+
+// parseMpd: janela ao vivo, formatação %0Nd, BaseURL e recusas claras.
+{
+  const live = (extra = '', tpl = '<SegmentTemplate timescale="1" duration="2" initialization="i_$RepresentationID$.mp4" media="s_$Number%05d$.m4s" startNumber="10"/>') =>
+    `<MPD type="dynamic" availabilityStartTime="2026-01-01T00:00:00Z" timeShiftBufferDepth="PT10S"><BaseURL>http://h/base/</BaseURL><Period start="PT0S">${extra}<AdaptationSet mimeType="video/mp4"><Representation id="A" codecs="hvc1.1.6.L93.B0" width="64" height="64" bandwidth="1">${tpl}</Representation></AdaptationSet></Period></MPD>`;
+  const now = Date.parse('2026-01-01T00:01:00Z');
+  const seqState = new Map();
+  const a = parseMpd(live(), 'http://x/m.mpd', { now, seqState });
+  check(a.segments.length === 5 && a.endList === false && a.map === 'http://h/base/i_A.mp4', 'parseMpd dinâmico @duration: janela de 5 segmentos, init e BaseURL');
+  check(a.segments[0].uri === 'http://h/base/s_00035.m4s' && a.segments.at(-1).uri === 'http://h/base/s_00039.m4s', 'parseMpd: $Number%05d$ e startNumber');
+  const b = parseMpd(live(), 'http://x/m.mpd', { now: now + 4000, seqState });
+  check(b.segments.at(-1).seq === a.segments.at(-1).seq + 2, 'parseMpd: seq consecutivo e estável entre atualizações');
+  check(a.segments[0].pdt === Date.parse('2026-01-01T00:00:50Z'), 'parseMpd: PDT derivado do availabilityStartTime');
+  const refuse = (xml, re, msg) => { try { parseMpd(xml, 'http://x/m.mpd', { now }); check(false, msg); } catch (e) { check(re.test(e.message), msg); } };
+  refuse(live('', '<SegmentList/>').replace('codecs="hvc1.1.6.L93.B0"', 'codecs="hvc1.1.6.L93.B0"'), /SegmentList/, 'parseMpd recusa SegmentList com mensagem clara');
+  refuse(live().replace('hvc1.1.6.L93.B0', 'avc1.64001f'), /H\.264/, 'parseMpd recusa canal H.264 com mensagem clara');
+  refuse(live('', '<SegmentBase indexRange="0-1"/>'), /on-demand|SegmentTemplate/, 'parseMpd recusa SegmentBase (arquivo único)');
+}
 
 // Modo comparação: 1 câmera, sem merge.
 {

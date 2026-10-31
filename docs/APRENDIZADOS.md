@@ -131,3 +131,7 @@ mesma linha do Homebrew 26.07) tudo funcionou. Use a versão do Homebrew.
   (`make check-hls`). Limite conhecido: canais com taxas de segmento ligeiramente
   diferentes (29,97 vs 30) deslizam um contra o outro ao longo de horas; a pareação
   por contagem não se reancora sozinha.
+- **DASH como fonte.** `web/dash.js` lê o MPD de um canal e devolve a mesma estrutura de
+  uma playlist HLS (segmentos, init, duração, PDT derivado do `availabilityStartTime`), então
+  o pareamento e o merge não mudam. Os números de sequência são consecutivos e estáveis
+  entre atualizações do MPD (mapa `t -> seq` mantido por canal).

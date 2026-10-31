@@ -376,7 +376,7 @@ setOn('.controls .seg:first-child', 'mode', ui.mode);
 
 function showSource() {
   const hls = ui.source === 'hls';
-  $('#sourceName').textContent = hls ? '4 streams HLS' : 'DASH do servidor local';
+  $('#sourceName').textContent = hls ? '4 streams HLS/DASH' : 'DASH do servidor local';
   $('#hlsUrls').hidden = !hls;
   setOn('#sourceKind', 'source', ui.source);
   ui.hls.forEach((u, i) => { document.querySelector(`[name="hls${i + 1}"]`).value = u; });
@@ -390,7 +390,7 @@ $('#sourceForm').addEventListener('submit', (e) => {
   e.preventDefault();
   if (ui.source === 'hls') {
     ui.hls = [1, 2, 3, 4].map((n) => document.querySelector(`[name="hls${n}"]`).value.trim());
-    if (!ui.hls.every(Boolean)) { banner('Preencha as 4 URLs HLS (uma por câmera).'); return; }
+    if (!ui.hls.every(Boolean)) { banner('Preencha as 4 URLs (HLS ou DASH, uma por canal).'); return; }
     ui.proxy = $('#proxyChk').checked;
     try { localStorage.setItem('mv.hls', JSON.stringify(ui.hls)); localStorage.setItem('mv.proxy', JSON.stringify(ui.proxy)); } catch { /* sem storage */ }
   }
