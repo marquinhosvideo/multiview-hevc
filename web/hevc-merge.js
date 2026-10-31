@@ -223,7 +223,6 @@ export function parsePps(nal) {
     }
   }
   if (p.listsModificationPresent) throw new Error('lists_modification_present não suportado');
-  if (p.weightedPred || p.weightedBipred) throw new Error('weighted prediction não suportado');
   return p;
 }
 
@@ -295,6 +294,22 @@ function rewriteSlice(nal, sps, pps, isFirst, ctbAddr, addrBits) {
       let fromL0 = true;
       if (sliceType === 0) fromL0 = r.flag();
       if ((fromL0 && l0 > 1) || (!fromL0 && l1 > 1)) r.ue();
+    }
+    // pred_weight_table(): só é lida para achar o fim do cabeçalho; os pesos valem por slice, e cada
+    // câmera vira o seu próprio slice, então os bits são copiados como estão.
+    if ((pps.weightedPred && sliceType === 1) || (pps.weightedBipred && sliceType === 0)) {
+      r.ue();
+      const chroma = sps.separateColourPlane ? 0 : sps.chromaFormatIdc;
+      if (chroma !== 0) r.se();
+      for (const n of sliceType === 0 ? [l0, l1] : [l0]) {
+        const luma = [], chromaFlags = [];
+        for (let i = 0; i < n; i++) luma.push(r.flag());
+        if (chroma !== 0) for (let i = 0; i < n; i++) chromaFlags.push(r.flag());
+        for (let i = 0; i < n; i++) {
+          if (luma[i]) { r.se(); r.se(); }
+          if (chromaFlags[i]) for (let j = 0; j < 2; j++) { r.se(); r.se(); }
+        }
+      }
     }
     r.ue(); // five_minus_max_num_merge_cand
   }

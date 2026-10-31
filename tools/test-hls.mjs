@@ -8,7 +8,7 @@
 // cada câmera decodificada sozinha.
 //
 //   node tools/test-hls.mjs
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -214,6 +214,63 @@ await run('HLS + DASH misturados', [`${base}/fmp4/cam1/index.m3u8`, `${base}/fmp
     const same = ref.filter((h, i) => h === got[i]).length;
     check(same === ref.length && got.length === ref.length, `WPP cam${n}: ${same}/${ref.length} quadros idênticos à câmera isolada`);
   }
+}
+
+// Predição ponderada (pred_weight_table no slice header): barras estáticas com fade, x265 com weightp=1 e sem TMVP.
+// Sem movimento e sem TMVP nada cruza a borda do tile, então o merge tem de sair bit a bit igual nas 4 câmeras:
+// o que está em jogo é só o cabeçalho com a tabela de pesos (L0, e L0+L1 com B-frames) ter sido lido e copiado certo.
+for (const [label, extra, bipred] of [['P', 'bframes=0:weightp=1', false], ['B', 'bframes=3:weightp=1:weightb=1', true]]) {
+  const dir = join(work, `wp${label}`); mkdirSync(dir, { recursive: true });
+  const bars = ['smptebars', 'smptehdbars', 'pal75bars', 'pal100bars'];
+  for (let n = 1; n <= 4; n++) {
+    sh('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', `${bars[n - 1]}=s=${W}x${H}:r=30`, '-t', '4', '-vf',
+      'fade=t=in:st=0:d=2,fade=t=out:st=2:d=2,format=yuv420p,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv',
+      '-c:v', 'libx265', '-x265-params', `keyint=60:min-keyint=60:scenecut=0:slices=1:no-wpp=1:temporal-mvp=0:${extra}:repeat-headers=1:log-level=error`,
+      '-tag:v', 'hvc1', join(dir, `c${n}.mp4`)]);
+    const d = join(dir, `cam${n}`); mkdirSync(d, { recursive: true });
+    sh('ffmpeg', ['-v', 'error', '-y', '-i', join(dir, `c${n}.mp4`), '-c', 'copy', '-f', 'hls', '-hls_time', '2', '-hls_playlist_type', 'vod',
+      '-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', 'init.mp4', '-hls_segment_filename', join(d, 'seg_%d.m4s'), join(d, 'index.m3u8')]);
+  }
+  const { parseCameraInit } = await import('../web/hevc-merge.js');
+  const pps = parseCameraInit(new Uint8Array(readFileSync(join(dir, 'cam1', 'init.mp4')))).pps;
+  if (label === 'N') check(pps.weightedPred === false, 'controle (sem weightp): weighted_pred_flag desligado');
+  else check(pps.weightedPred === true && pps.weightedBipred === bipred, `weightp ${label}: a fonte liga weighted_pred_flag${bipred ? ' e weighted_bipred_flag' : ''} no PPS`);
+  const camFile = (n) => {
+    const d = join(dir, `cam${n}`), segs = readdirSync(d).filter((f) => f.endsWith('.m4s')).sort((x, y) => Number(x.match(/\d+/)[0]) - Number(y.match(/\d+/)[0]));
+    const f = join(dir, `ref${n}.mp4`);
+    writeFileSync(f, Buffer.concat([readFileSync(join(d, 'init.mp4')), ...segs.map((x) => readFileSync(join(d, x)))]));
+    return f;
+  };
+  const { plugin } = createMultiviewScheme(fakeShaka, { fetchBytes, xmlApi: null });
+  const call = async (uri) => new Uint8Array((await plugin(uri, { uris: [uri] }, 0).promise).data);
+  const q = [1, 2, 3, 4].map((n) => `&hls=${encodeURIComponent(`${base}/wp${label}/cam${n}/index.m3u8`)}`).join('');
+  const m = new TextDecoder().decode(await call(`mv://manifest/hls?cams=1,2,3,4&sync=independent${q}`));
+  const parts = [await call('mv://seg/init.mp4')];
+  for (const t of [...m.matchAll(/<S t="(\d+)"/g)].map((x) => Number(x[1]))) parts.push(await call(`mv://seg/${t}.m4s`));
+  const out = join(dir, 'merged.mp4'); writeFileSync(out, Buffer.concat(parts));
+  // Compara os elementos de sintaxe de cada slice header (trace_headers do FFmpeg) entre a câmera
+  // sozinha e o seu slice no merge. Pixels não servem aqui: com x265 os vetores podem cruzar a borda do tile.
+  const slicesOf = (file) => {
+    const txt = spawnSync('ffmpeg', ['-hide_banner', '-v', 'debug', '-i', file, '-c', 'copy', '-bsf:v', 'trace_headers', '-f', 'null', '-'], { encoding: 'utf8', maxBuffer: 1 << 29 }).stderr;
+    const out = []; let cur = null;
+    for (const line of txt.split('\n')) {
+      if (/trace_headers[^\]]*\] Slice Segment Header/.test(line)) { cur = []; out.push(cur); continue; }
+      if (/trace_headers[^\]]*\] (?!\d)/.test(line)) { cur = null; continue; }
+      const m = cur && line.match(/trace_headers[^\]]*\]\s+\d+\s+(\w+)(?:\[[^\]]*\])*\s+[01]*\s*=\s*(-?\d+)/);
+      if (m && !/^(first_slice_segment_in_pic_flag|slice_segment_address|alignment_bit|slice_pic_parameter_set_id|num_entry_point_offsets)/.test(m[1])) cur.push(`${m[1]}=${m[2]}`);
+    }
+    return out;
+  };
+  const merged = slicesOf(out);
+  let weighted = 0;
+  for (let n = 1; n <= 4; n++) {
+    const ref = slicesOf(camFile(n));
+    const mine = merged.filter((_, i) => i % 4 === n - 1);
+    const same = ref.filter((sl, i) => mine[i] && sl.join('|') === mine[i].join('|')).length;
+    if (n === 1) weighted = ref.filter((sl) => sl.some((e) => /^luma_weight_l0_flag=1/.test(e))).length;
+    check(ref.length === 120 && same === ref.length, `weightp ${label} cam${n}: ${same}/${ref.length} slice headers idênticos (incl. pred_weight_table)`);
+  }
+  check(weighted > 0, `weightp ${label}: a fonte usa pesos de verdade (${weighted} slices com luma_weight_l0_flag=1)`);
 }
 
 // Modo comparação: 1 câmera, sem merge.

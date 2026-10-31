@@ -144,3 +144,9 @@ mesma linha do Homebrew 26.07) tudo funcionou. Use a versão do Homebrew.
   recortam o frame, então a disposição não muda nada para quem assiste. Não testado: decoders de
   hardware, que podem recusar tiles + WPP no mesmo stream; se for o caso, desligue o WPP no
   encoder (`--no-wpp`).
+- **Predição ponderada (weighted prediction).** Aceita: o `pred_weight_table()` do slice header
+  é lido só para achar o fim do cabeçalho, e os bits são copiados como estão (os pesos valem por
+  slice e cada câmera é o seu slice). Validado comparando, com o `trace_headers` do FFmpeg, todos
+  os elementos do slice header da câmera isolada e do seu slice no merge (P e B, com pesos
+  reais). Isso prova o cabeçalho, não os pixels: com x265 os vetores podem cruzar a borda do
+  tile, então a prova de pixels continua sendo `make check-hls` com um encode restrito.
