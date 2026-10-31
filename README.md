@@ -156,6 +156,47 @@ devolve um erro HTTP recuperável e o Shaka tenta de novo, como faria com um 404
 servidor ao vivo e confere o resultado bit a bit, e testa a página em jsdom com
 um Shaka simulado.
 
+### 5. Fonte HLS (4 streams `.m3u8`, por exemplo de um Elemental Live)
+
+O player web aceita **4 playlists HLS, uma por câmera**, no lugar do DASH do GPAC.
+Segmentos **fMP4/CMAF** ou **MPEG-TS** (o TS é remuxado para fMP4 em JavaScript,
+sem recodificar), playlist de mídia ou master (usa a variante HEVC de maior
+banda), ao vivo ou VOD. O Shaka continua sem modificação: o plugin `mv://` lê as
+playlists, **pareia os segmentos** das câmeras (por `EXT-X-PROGRAM-DATE-TIME`, ou
+pelo número de sequência se não houver), faz o merge e entrega um MPD virtual com
+uma representação só.
+
+**Antes de tocar, diagnostique os seus streams.** HLS de um encoder comum
+costuma não ser mergeável (ver "O que aprendemos"), e o merge nele não dá erro:
+dá imagem sutilmente errada.
+
+```bash
+make check-hls HLS="https://.../cam1.m3u8 https://.../cam2.m3u8 https://.../cam3.m3u8 https://.../cam4.m3u8"
+```
+
+O diagnóstico faz o mesmo que o player, mostra container, perfil, tile, TMVP e
+relógio de cada câmera e, com o `ffmpeg`, **decodifica o resultado e compara cada
+tile, quadro a quadro, com a câmera decodificada sozinha**. Essa é a única forma
+de saber se os vetores de movimento do encoder respeitam as bordas do tile.
+
+Para tocar, cole as 4 URLs em *Fonte do vídeo* na página (ou use
+`?hls=url1,url2,url3,url4`). O servidor dos streams precisa liberar **CORS**.
+
+Para testar sem o encoder real, publique as 4 câmeras locais como HLS ao vivo:
+
+```bash
+make hls-server              # terminal 1 (HLS_FORMAT=ts para MPEG-TS)
+make web-hls                 # terminal 2
+make check-hls HLS="http://127.0.0.1:8082/cam1/index.m3u8 http://127.0.0.1:8082/cam2/index.m3u8 http://127.0.0.1:8082/cam3/index.m3u8 http://127.0.0.1:8082/cam4/index.m3u8"
+```
+
+`make hls-test` valida todo o caminho HLS sem navegador (fMP4, TS, TS com
+B-frames, ao vivo, master, parser). Como não depende do Kvazaar, usa 4 câmeras
+HEVC só com quadros intra, onde o merge é exato por construção.
+
+Para HLS que **não** seja mergeável (encoder comum), o caminho é recodificar
+antes, como o `scripts/02_encode.sh` faz com os arquivos locais.
+
 ## Resultados de referência
 
 Rodada completa feita antes da entrega, em Linux x86_64 (Ubuntu 24.04, Kvazaar
@@ -230,9 +271,15 @@ scripts/07_negative_control.sh  controle negativo
 scripts/08_verify_live.sh   prova bit-exact da gravação ao vivo (ou de qualquer MP4/HEVC mergeado)
 scripts/09_web.sh           serve a página do player web e abre o navegador
 scripts/10_web_test.sh      testes do player web sem navegador
+scripts/11_hls_server.sh    publica as 4 câmeras locais como HLS ao vivo (ffmpeg + CORS)
 web/index.html, app.js      página: Shaka, modos, layouts, painel
 web/mv-shaka.js             plugin mv:// do Shaka + reescrita do MPD
 web/hevc-merge.js           merge HEVC em JavaScript (SPS/PPS/slice header + fMP4)
+web/hls.js                  parser de playlists HLS e pareamento dos segmentos entre câmeras
+web/hls-source.js           fonte HLS: MPD virtual com SegmentTimeline e segmentos mergeados
+web/ts-remux.js             MPEG-TS -> fMP4 (só HEVC), para HLS com segmentos .ts
+tools/check-hls.mjs         diagnóstico: 4 HLS são mergeáveis? (inclui prova bit a bit)
+tools/test-hls.mjs          testes do caminho HLS, sem navegador
 web/vendor/                 Shaka Player 5.3.3 (dash build) e licença
 tools/                      testes em Node (merge, plugin, página em jsdom)
 docs/PLANO.md               plano em fases até produção

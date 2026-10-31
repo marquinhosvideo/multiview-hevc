@@ -155,7 +155,7 @@ export function parseSps(nal) {
   s.conformanceWindow = r.flag();
   if (s.conformanceWindow) { r.ue(); r.ue(); r.ue(); r.ue(); }
   s.posAfterConf = r.pos;
-  r.ue(); r.ue(); // bit depths
+  s.bitDepthLuma = r.ue() + 8; s.bitDepthChroma = r.ue() + 8;
   s.log2MaxPocLsb = r.ue() + 4;
   const subOrdering = r.flag();
   for (let i = subOrdering ? 0 : maxSub; i <= maxSub; i++) { r.ue(); r.ue(); r.ue(); }
@@ -435,6 +435,32 @@ export function parseCameraInit(initBytes) {
   if (hvcC.lengthSize !== 4) throw new Error('lengthSizeMinusOne diferente de 3 não suportado');
   const sps = parseSps(hvcC.sps), pps = parsePps(hvcC.pps);
   return { boxes, hvcC, sps, pps, raw: initBytes };
+}
+
+// Timescale (mdhd) de um init segment.
+export function initTimescale(initBytes) {
+  const mdhd = findPath(parseBoxes(initBytes), ['moov', 'trak', 'mdia', 'mdhd']).data;
+  return readU32(mdhd, mdhd[0] === 1 ? 20 : 12);
+}
+
+// baseMediaDecodeTime (tfdt) do primeiro fragmento de um segmento.
+export function firstDecodeTime(segBytes) {
+  const moof = find(parseBoxes(segBytes), 'moof');
+  if (!moof) throw new Error('segmento sem moof');
+  return readFragment(segBytes, moof).decodeTime;
+}
+
+// Codec string RFC 6381 ("hvc1.1.6.L153.B0") a partir do hvcC de um init.
+export function initCodecString(initBytes) {
+  const { hvcC } = parseCameraInit(initBytes);
+  const h = hvcC.header;
+  const hex = (n) => n.toString(16).toUpperCase();
+  const space = ['', 'A', 'B', 'C'][h[1] >> 6];
+  let compat = 0;
+  for (let i = 0; i < 32; i++) if ((readU32(h, 2) >>> i) & 1) compat |= 1 << (31 - i); // bits invertidos
+  const cons = [...h.subarray(6, 12)];
+  while (cons.length > 1 && cons[cons.length - 1] === 0) cons.pop();
+  return `hvc1.${space}${h[1] & 31}.${hex(compat >>> 0)}.${h[1] & 32 ? 'H' : 'L'}${h[12]}.${cons.map(hex).join('.')}`;
 }
 
 // Grade usada para N câmeras.

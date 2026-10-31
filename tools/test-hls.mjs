@@ -1,0 +1,165 @@
+// Teste da fonte HLS (web/hls*.js, web/ts-remux.js, plugin mv://) sem navegador.
+//
+// Gera 4 câmeras HEVC "só intra" com o ffmpeg (libx265, 1 slice, sem WPP): sem
+// predição entre quadros o merge é exato por construção, então dá para conferir
+// bit a bit o pipeline HLS inteiro sem o Kvazaar. Empacota cada câmera como HLS
+// fMP4 e como HLS MPEG-TS, serve por HTTP e passa pelo plugin mv:// como o
+// Shaka passaria. O resultado é decodificado e comparado, quadro a quadro, com
+// cada câmera decodificada sozinha.
+//
+//   node tools/test-hls.mjs
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, statSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join, extname } from 'node:path';
+import { createMultiviewScheme, fetchBytes } from '../web/mv-shaka.js';
+import { parseMedia, parseMaster, alignSlots } from '../web/hls.js';
+
+const W = 1024, H = 576, SECONDS = 6;
+const work = mkdtempSync(join(tmpdir(), 'mv-hls-'));
+const sh = (cmd, args) => execFileSync(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 1 << 28 });
+const sources = ['testsrc2', 'mandelbrot', 'gradients=speed=0.03:n=5', 'smptehdbars'];
+let failures = 0;
+const check = (ok, msg) => { console.log(`${ok ? '✔' : '✘'} ${msg}`); if (!ok) failures++; };
+
+// ------------------------------------------------------------------ fontes
+for (const [i, src] of sources.entries()) {
+  sh('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', `${src}${src.includes('=') ? ':' : '='}s=${W}x${H}:r=30`, '-t', String(SECONDS),
+    '-vf', 'format=yuv420p,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv', '-c:v', 'libx265', '-x265-params', 'keyint=1:slices=1:no-wpp=1:repeat-headers=1:log-level=error',
+    '-tag:v', 'hvc1', join(work, `cam${i + 1}.mp4`)]);
+}
+for (const kind of ['fmp4', 'ts']) {
+  for (let n = 1; n <= 4; n++) {
+    const dir = join(work, kind, `cam${n}`); mkdirSync(dir, { recursive: true });
+    sh('ffmpeg', ['-v', 'error', '-y', '-i', join(work, `cam${n}.mp4`), '-c', 'copy', '-f', 'hls', '-hls_time', '2',
+      '-hls_playlist_type', 'vod', '-hls_flags', 'program_date_time+independent_segments',
+      '-hls_segment_type', kind === 'ts' ? 'mpegts' : 'fmp4', '-hls_fmp4_init_filename', 'init.mp4',
+      '-hls_segment_filename', join(dir, kind === 'ts' ? 'seg_%d.ts' : 'seg_%d.m4s'), join(dir, 'index.m3u8')]);
+  }
+}
+// ffmpeg grava o relógio da máquina no EXT-X-PROGRAM-DATE-TIME; como cada câmera foi
+// empacotada num momento, fixa um relógio comum (como encoders sincronizados teriam).
+const T0 = Date.parse('2026-01-01T12:00:00.000Z');
+for (const kind of ['fmp4', 'ts']) {
+  for (let n = 1; n <= 4; n++) {
+    const f = join(work, kind, `cam${n}`, 'index.m3u8');
+    let i = 0;
+    writeFileSync(f, readFileSync(f, 'utf8').replace(/#EXT-X-PROGRAM-DATE-TIME:.*/g, () => `#EXT-X-PROGRAM-DATE-TIME:${new Date(T0 + 2000 * i++).toISOString()}`));
+  }
+}
+// Variantes: "live" (sem ENDLIST) e master playlist apontando para a media playlist.
+for (let n = 1; n <= 4; n++) {
+  const d = join(work, 'fmp4', `cam${n}`);
+  const pl = readFileSync(join(d, 'index.m3u8'), 'utf8');
+  writeFileSync(join(d, 'live.m3u8'), pl.replace('#EXT-X-ENDLIST', '').replace('#EXT-X-PLAYLIST-TYPE:VOD', ''));
+  writeFileSync(join(d, 'master.m3u8'), `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2500000,RESOLUTION=${W}x${H},CODECS="hvc1.1.6.L93.B0"\nindex.m3u8\n`);
+}
+
+// ------------------------------------------------------------------ servidor
+const MIME = { '.m3u8': 'application/vnd.apple.mpegurl', '.m4s': 'video/mp4', '.mp4': 'video/mp4', '.ts': 'video/mp2t' };
+const server = createServer((req, res) => {
+  const f = join(work, decodeURIComponent(req.url.split('?')[0]));
+  try { statSync(f); res.writeHead(200, { 'content-type': MIME[extname(f)] || 'application/octet-stream', connection: 'close' }); res.end(readFileSync(f)); }
+  catch { res.writeHead(404); res.end(); }
+}).listen(0);
+await new Promise((r) => server.once('listening', r));
+const base = `http://127.0.0.1:${server.address().port}`;
+
+// ------------------------------------------------------------------ shaka falso
+class ShakaError extends Error {
+  constructor(severity, category, code, ...data) { super(`shaka.util.Error ${code}`); Object.assign(this, { severity, category, code, data }); }
+}
+ShakaError.Severity = { RECOVERABLE: 1, CRITICAL: 2 };
+ShakaError.Category = { NETWORK: 1 };
+ShakaError.Code = { BAD_HTTP_STATUS: 1001, HTTP_ERROR: 1002 };
+const fakeShaka = { util: { Error: ShakaError, AbortableOperation: { notAbortable: (promise) => ({ promise }) } } };
+
+const frameMd5 = (file, vf) => sh('ffmpeg', ['-v', 'error', '-i', file, ...(vf ? ['-vf', vf] : []), '-f', 'framemd5', '-'])
+  .toString().split('\n').filter((l) => l && !l.startsWith('#')).map((l) => l.split(',')[5].trim());
+
+async function run(label, playlistUrls, { expectLive } = {}) {
+  console.log(`\n--- ${label}`);
+  const events = [];
+  const { plugin } = createMultiviewScheme(fakeShaka, { fetchBytes, xmlApi: null, onEvent: (e) => events.push(e) });
+  const call = async (uri) => new Uint8Array((await plugin(uri, { uris: [uri] }, 0).promise).data);
+  const hls = playlistUrls.map((u) => `&hls=${encodeURIComponent(u)}`).join('');
+  const mpd = new TextDecoder().decode(await call(`mv://manifest/hls?cams=1,2,3,4${hls}`));
+  const rep = mpd.match(/<Representation[^>]*>/)[0];
+  check(/width="2048"/.test(rep) && /height="1152"/.test(rep), `manifesto com 1 representação 2048x1152 (${rep.match(/codecs="[^"]+"/)[0]})`);
+  check((mpd.match(/<AdaptationSet/g) || []).length === 1, 'um único AdaptationSet');
+  check(expectLive ? /type="dynamic"/.test(mpd) && /availabilityStartTime/.test(mpd) : /type="static"/.test(mpd), expectLive ? 'MPD dinâmico com availabilityStartTime' : 'MPD estático');
+  const times = [...mpd.matchAll(/<S t="(\d+)" d="(\d+)"/g)].map((m) => Number(m[1]));
+  check(times.length === SECONDS / 2, `${times.length} segmentos na linha do tempo`);
+
+  const parts = [await call('mv://seg/init.mp4')];
+  for (const t of times) parts.push(await call(`mv://seg/${t}.m4s`));
+  const out = join(work, `${label.replace(/\W+/g, '_')}.mp4`);
+  writeFileSync(out, Buffer.concat(parts));
+
+  try { await call(`mv://seg/${times[times.length - 1] + 999999}.m4s`); check(false, 'segmento inexistente deveria falhar'); }
+  catch (e) { check(e.code === 1001 && e.severity === 1, 'segmento inexistente vira erro HTTP recuperável (404)'); }
+
+  const pos = [[0, 0], [W, 0], [0, H], [W, H]];
+  for (let n = 1; n <= 4; n++) {
+    const ref = frameMd5(join(work, `cam${n}.mp4`));
+    const got = frameMd5(out, `crop=${W}:${H}:${pos[n - 1][0]}:${pos[n - 1][1]}`);
+    const same = ref.filter((h, i) => h === got[i]).length;
+    check(same === ref.length && got.length === ref.length, `cam${n}: ${same}/${ref.length} quadros idênticos à câmera isolada`);
+  }
+  return { events, mpd };
+}
+
+// ------------------------------------------------------------------ casos
+const urls = (kind, file = 'index.m3u8') => [1, 2, 3, 4].map((n) => `${base}/${kind}/cam${n}/${file}`);
+const r1 = await run('HLS fMP4 (VOD)', urls('fmp4'));
+check(r1.events.some((e) => e.type === 'manifest' && e.info.mode === 'pdt'), 'alinhamento por EXT-X-PROGRAM-DATE-TIME');
+await run('HLS fMP4 (live, sem ENDLIST)', urls('fmp4', 'live.m3u8'), { expectLive: true });
+await run('HLS fMP4 via master playlist', urls('fmp4', 'master.m3u8'));
+const r4 = await run('HLS MPEG-TS (remux em JS)', urls('ts'));
+check(r4.events.some((e) => e.type === 'manifest' && e.info.containers.every((c) => c === 'ts')), 'container detectado como TS');
+
+// Modo comparação: 1 câmera, sem merge.
+{
+  const { plugin } = createMultiviewScheme(fakeShaka, { fetchBytes, xmlApi: null });
+  const call = async (uri) => new Uint8Array((await plugin(uri, { uris: [uri] }, 0).promise).data);
+  const hls = urls('ts').map((u) => `&hls=${encodeURIComponent(u)}`).join('');
+  const mpd = new TextDecoder().decode(await call(`mv://manifest/hlscam?cam=3${hls}`));
+  const ts0 = Number(mpd.match(/<S t="(\d+)"/)[1]);
+  const seg = await call(`mv://camseg/3/${ts0}.m4s`);
+  check(/width="1024"/.test(mpd) && seg.length > 1000, 'modo comparação (1 câmera TS) entrega manifesto e segmento próprios');
+}
+
+// Remux de TS com B-frames (DTS != PTS): o fMP4 gerado tem que decodificar
+// exatamente os mesmos quadros que o TS original.
+{
+  const { tsInit, tsToFragment } = await import('../web/ts-remux.js');
+  const dir = join(work, 'bframes'); mkdirSync(dir, { recursive: true });
+  sh('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', `testsrc2=s=${W}x${H}:r=30`, '-t', '6', '-pix_fmt', 'yuv420p', '-c:v', 'libx265',
+    '-x265-params', 'keyint=60:min-keyint=60:scenecut=0:bframes=3:slices=1:no-wpp=1:repeat-headers=1:log-level=error', '-f', 'hls', '-hls_time', '2',
+    '-hls_playlist_type', 'vod', '-hls_segment_type', 'mpegts', '-hls_segment_filename', join(dir, 's%d.ts'), join(dir, 'i.m3u8')]);
+  const segs = readdirSync(dir).filter((f) => f.endsWith('.ts')).sort().map((f) => new Uint8Array(readFileSync(join(dir, f))));
+  const parts = [tsInit(segs[0]), ...segs.map((x, i) => tsToFragment(x, i + 1))];
+  writeFileSync(join(dir, 'remux.mp4'), Buffer.concat(parts));
+  writeFileSync(join(dir, 'all.ts'), Buffer.concat(segs));
+  const a = frameMd5(join(dir, 'all.ts')), b = frameMd5(join(dir, 'remux.mp4'));
+  check(a.length === 180 && a.length === b.length && a.every((h, i) => h === b[i]), `remux de TS com B-frames: ${b.filter((h, i) => h === a[i]).length}/${a.length} quadros idênticos ao TS original`);
+}
+
+// Parser e alinhamento.
+{
+  const pl = parseMedia(readFileSync(join(work, 'fmp4/cam1/index.m3u8'), 'utf8'), `${base}/x/index.m3u8`);
+  check(pl.container === 'fmp4' && pl.map.endsWith('init.mp4') && pl.segments.length === 3 && pl.segments[1].pdt > 0, 'parseMedia: fMP4, MAP, 3 segmentos, PDT propagado');
+  const shifted = { ...pl, segments: pl.segments.map((s) => ({ ...s, seq: s.seq + 100 })) };
+  check(alignSlots([pl, shifted]).slots.length === 3, 'alinhamento por PDT ignora numeração de sequência diferente');
+  const noPdt = (p, d) => ({ ...p, segments: p.segments.map((s) => ({ ...s, pdt: null, seq: s.seq + d })) });
+  check(alignSlots([noPdt(pl, 0), noPdt(pl, 1)]).slots.length === 2, 'sem PDT, alinha por número de sequência (interseção)');
+  check(parseMaster('#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1,CODECS="avc1.42"\na.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2,CODECS="hvc1.1.6.L93.B0"\nb.m3u8\n', 'http://h/')[0].uri === 'http://h/b.m3u8', 'parseMaster ordena por banda');
+  let enc = false;
+  try { parseMedia('#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="k"\n#EXTINF:2,\na.ts\n', 'http://h/'); } catch { enc = true; }
+  check(enc, 'segmentos criptografados são recusados com mensagem clara');
+}
+
+server.close();
+console.log(failures ? `\n${failures} verificação(ões) falharam` : '\nHLS: tudo certo');
+process.exit(failures ? 1 : 0);

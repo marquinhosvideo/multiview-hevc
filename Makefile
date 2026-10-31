@@ -2,7 +2,7 @@ SHELL := /bin/bash
 S := ./scripts
 
 .PHONY: help deps check sources encode merge verify offline control \
-        live-server live-play live-proof live-record verify-live web web-test open clean distclean
+        live-server live-play live-proof live-record verify-live web web-test hls-server web-hls check-hls hls-test open clean distclean
 
 help:
 	@echo "POC multiview HEVC com tiles: 4 câmeras, 1 decode"
@@ -21,6 +21,13 @@ help:
 	@echo ""
 	@echo "  make web           [terminal 2] player web com Shaka: merge no navegador + 1 decoder"
 	@echo "  make web-test      testa o player web sem navegador (Node): merge JS, plugin do Shaka, página"
+	@echo ""
+	@echo ""
+	@echo "  Fonte HLS (4 streams .m3u8, por exemplo do Elemental Live):"
+	@echo "  make check-hls HLS=\"url1 url2 url3 url4\"   diagnostica se os streams são mergeáveis (inclui prova bit a bit)"
+	@echo "  make hls-server    [terminal 1] publica as 4 câmeras locais como HLS ao vivo (HLS_FORMAT=ts para MPEG-TS)"
+	@echo "  make web-hls       [terminal 2] player web já apontado para o HLS local"
+	@echo "  make hls-test      testa o caminho HLS (fMP4 e TS) sem navegador, bit a bit (precisa de Node 18+ e ffmpeg)"
 	@echo ""
 	@echo "  Variáveis úteis: CAMS=1,4  BITRATE=4000000  CLIP_SECONDS=30  LIVE_PORT=8080"
 
@@ -45,6 +52,17 @@ live-record: ; @$(S)/06_live_client.sh record 20
 verify-live: ; @$(S)/08_verify_live.sh
 web:         ; @$(S)/09_web.sh
 web-test:    ; @$(S)/10_web_test.sh
+
+hls-server:  ; @$(S)/11_hls_server.sh
+web-hls:     ; @LIVE_HLS=1 $(S)/09_web.sh
+check-hls:
+	@test -n "$(HLS)" || (echo 'uso: make check-hls HLS="url1 url2 url3 url4"' && exit 1)
+	@command -v node >/dev/null || (echo "node não encontrado: brew install node" && exit 1)
+	@node tools/check-hls.mjs $(HLS)
+hls-test:
+	@command -v node >/dev/null || (echo "node não encontrado: brew install node" && exit 1)
+	@[ -d tools/node_modules ] || (cd tools && npm install --silent)
+	@node tools/test-hls.mjs
 
 clean:
 	rm -rf build proof

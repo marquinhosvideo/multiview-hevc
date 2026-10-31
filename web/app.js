@@ -12,7 +12,21 @@ function storedLayout() {
   try { const v = localStorage.getItem('mv.layout'); return LAYOUTS.includes(v) ? v : 'grid'; } catch { return 'grid'; }
 }
 
+function storedHls() {
+  try { const v = JSON.parse(localStorage.getItem('mv.hls') || 'null'); if (Array.isArray(v) && v.length === 4) return v; } catch { /* ignora */ }
+  return ['', '', '', ''];
+}
+// Fonte HLS: ?hls=u1,u2,u3,u4  ou  ?hls1=...&hls2=...&hls3=...&hls4=...
+function hlsFromUrl() {
+  const list = (params.get('hls') || '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (list.length === 4) return list;
+  const four = [1, 2, 3, 4].map((n) => params.get(`hls${n}`) || '');
+  return four.every(Boolean) ? four : null;
+}
+
 const ui = {
+  source: hlsFromUrl() ? 'hls' : 'dash',
+  hls: hlsFromUrl() || storedHls(),
   mode: params.get('mode') === 'compare' ? 'compare' : 'merge',
   layout: LAYOUTS.includes(params.get('layout')) ? params.get('layout') : storedLayout(),
   cams: params.get('cams') || '1,2,3,4',
@@ -51,8 +65,9 @@ const scheme = createMultiviewScheme(shaka, {
   onEvent(e) {
     if (e.type === 'manifest') {
       codecs = e.cameras[0].codecs || codecs;
-      if (!geometry || geometry.cams.join() !== e.cameras.map((c) => c.index).join()) {
+      if (!geometry || !geometry.cams || geometry.cams.join() !== e.cameras.map((c) => c.index).join()) {
         log(`manifesto virtual: ${e.cameras.length} câmeras → 1 representação ${e.width}x${e.height} (grade ${e.grid.cols}x${e.grid.rows})`);
+        if (e.info) log(`HLS: segmentos ${[...new Set(e.info.containers)].join('/').toUpperCase()}, pareados por ${e.info.mode === 'pdt' ? 'program-date-time' : 'número de sequência'}, ${e.info.live ? 'ao vivo' : 'VOD'}`);
       }
       geometry = { ...(geometry || {}), width: e.width, height: e.height, cams: e.cameras.map((c) => c.index) };
     } else if (e.type === 'merger') {
@@ -64,6 +79,8 @@ const scheme = createMultiviewScheme(shaka, {
       if (merge.segments <= 3 || merge.segments % 10 === 0) {
         log(`segmento ${e.number}: ${e.cams} câmeras → 1 segmento em ${e.ms.toFixed(1)} ms`);
       }
+    } else if (e.type === 'warning') {
+      log(e.message, 'err');
     } else if (e.type === 'error') {
       log(`erro no merge: ${e.message}`, 'err');
       banner(`Erro no merge: ${e.message}`);
@@ -98,6 +115,8 @@ async function newPlayer(video, uri, label) {
   return player;
 }
 
+const hlsQuery = () => ui.hls.map((u) => `&hls=${encodeURIComponent(u)}`).join('');
+
 // ---------------------------------------------------------------- sessões
 async function stop() {
   const s = session; session = null;
@@ -119,8 +138,10 @@ async function start() {
   try {
     if (ui.mode === 'merge') {
       const video = $('#video');
-      const uri = `mv://manifest/merge?cams=${cams.join(',')}&mpd=${encodeURIComponent(MPD)}`;
-      log(`Multiview: 1 player Shaka, câmeras ${cams.join(', ')}`);
+      const uri = ui.source === 'hls'
+        ? `mv://manifest/hls?cams=${cams.join(',')}${hlsQuery()}`
+        : `mv://manifest/merge?cams=${cams.join(',')}&mpd=${encodeURIComponent(MPD)}`;
+      log(`Multiview: 1 player Shaka, câmeras ${cams.join(', ')} (${ui.source === 'hls' ? 'HLS' : 'DASH'})`);
       const player = await newPlayer(video, uri, 'multiview');
       if (session && session.token === token) session.players.push({ player, video, cam: 'canvas' });
       else player.destroy();
@@ -131,7 +152,9 @@ async function start() {
         fig.innerHTML = `<video muted playsinline></video><figcaption>CAM ${cam} · player ${cams.indexOf(cam) + 1}</figcaption>`;
         $('#compare').append(fig);
         const video = fig.querySelector('video');
-        const uri = `mv://manifest/cam?cam=${cam}&mpd=${encodeURIComponent(MPD)}`;
+        const uri = ui.source === 'hls'
+          ? `mv://manifest/hlscam?cam=${cam}${hlsQuery()}`
+          : `mv://manifest/cam?cam=${cam}&mpd=${encodeURIComponent(MPD)}`;
         const player = await newPlayer(video, uri, `CAM ${cam}`);
         if (session && session.token === token) session.players.push({ player, video, cam });
         else { player.destroy(); return; }
@@ -141,7 +164,12 @@ async function start() {
     const code = err && err.code;
     log(`falha ao carregar: ${code ? 'Shaka ' + code : err.message || err}`, 'err');
     if (code === 4032 || code === 4012) banner('Nenhuma variante tocável: o navegador não aceitou o HEVC. Use Safari ou Chrome no macOS.');
-    else if (code === 1001 || code === 1002) banner(`Não consegui falar com o servidor ao vivo em <code>${MPD}</code>. Ele está rodando (<code>make live-server</code>)?`);
+    else if (code === 1001 || code === 1002) {
+      const detail = err.data && err.data[1] && err.data[1].message ? ` <code>${String(err.data[1].message).slice(0, 300)}</code>` : '';
+      banner(ui.source === 'hls'
+        ? `Não consegui montar o multiview a partir dos HLS.${detail} Rode <code>make check-hls HLS="url1 url2 url3 url4"</code> para ver o que falta; confira também o CORS.`
+        : `Não consegui falar com o servidor ao vivo em <code>${MPD}</code>. Ele está rodando (<code>make live-server</code>)?`);
+    }
   }
 }
 
@@ -337,8 +365,32 @@ $('#cams').value = ui.cams;
 $('#cams').addEventListener('change', (e) => { ui.cams = e.target.value; start(); });
 setOn('.controls .seg:first-child', 'mode', ui.mode);
 
-log(`MPD do servidor: <code>${MPD}</code>`);
-start();
+function showSource() {
+  const hls = ui.source === 'hls';
+  $('#sourceName').textContent = hls ? '4 streams HLS' : 'DASH do servidor local';
+  $('#hlsUrls').hidden = !hls;
+  setOn('#sourceKind', 'source', ui.source);
+  ui.hls.forEach((u, i) => { document.querySelector(`[name="hls${i + 1}"]`).value = u; });
+  if (hls) $('#source').open = !ui.hls.every(Boolean);
+}
+for (const b of document.querySelectorAll('#sourceKind [data-source]')) {
+  b.addEventListener('click', () => { ui.source = b.dataset.source; showSource(); });
+}
+$('#sourceForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (ui.source === 'hls') {
+    ui.hls = [1, 2, 3, 4].map((n) => document.querySelector(`[name="hls${n}"]`).value.trim());
+    if (!ui.hls.every(Boolean)) { banner('Preencha as 4 URLs HLS (uma por câmera).'); return; }
+    try { localStorage.setItem('mv.hls', JSON.stringify(ui.hls)); } catch { /* sem storage */ }
+  }
+  banner('');
+  start();
+});
+showSource();
+
+if (ui.source === 'hls') log(`Fonte HLS: ${ui.hls.map((u) => `<code>${u.replace(/^https?:\/\//, '').slice(0, 48)}</code>`).join(' · ')}`);
+else log(`MPD do servidor: <code>${MPD}</code>`);
+if (ui.source === 'dash' || ui.hls.every(Boolean)) start();
 
 // Para inspeção no console.
 window.mv = { get session() { return session; }, get geometry() { return geometry; }, set geometry(g) { geometry = g; }, scheme, merge };

@@ -11,10 +11,16 @@
 //   mv://seg/123.m4s                          -> busca o segmento 123 das N câmeras
 //                                                e devolve 1 segmento mergeado
 //
+// Fonte HLS (uma playlist .m3u8 por câmera, repita &hls=... na ordem das câmeras):
+//   mv://manifest/hls?cams=1,2,3,4&hls=URL1&hls=URL2&hls=URL3&hls=URL4
+//   mv://manifest/hlscam?cam=2&hls=URL1&hls=URL2&hls=URL3&hls=URL4
+//   mv://seg/<tempo>.m4s e mv://camseg/<cam>/<tempo>.m4s funcionam como acima
+//
 // Para o Shaka (e para o MSE) existe um único stream de vídeo, logo um único
 // SourceBuffer e um único decoder.
 
 import { createMerger, gridFor } from './hevc-merge.js';
+import { createHlsSource } from './hls-source.js';
 
 const MPD_NS = 'urn:mpeg:dash:schema:mpd:2011';
 
@@ -103,7 +109,7 @@ export function buildSingleCamMpd(xml, mpdUrl, cam, xmlApi, presentationDelay = 
 //   opts.onEvent(evt): telemetria para a página (merge, erros)
 export function createMultiviewScheme(shakaNs, opts) {
   const { fetchBytes, xmlApi, onEvent = () => {}, presentationDelay = 6 } = opts;
-  const state = { cameras: null, merger: null, mergerKey: '', stats: { segments: 0, mergeMs: 0, bytesIn: 0, bytesOut: 0 } };
+  const state = { cameras: null, merger: null, mergerKey: '', hls: null, hlsCams: {}, stats: { segments: 0, mergeMs: 0, bytesIn: 0, bytesOut: 0 } };
   const te = new TextEncoder(), td = new TextDecoder();
 
   const httpError = (uri, status, requestType) => new shakaNs.util.Error(
@@ -124,13 +130,40 @@ export function createMultiviewScheme(shakaNs, opts) {
   async function handle(uri, requestType) {
     const u = new URL(uri);
     // new URL('mv://manifest/merge') => host 'manifest', pathname '/merge'
+    if (u.host === 'manifest' && (u.pathname === '/hls' || u.pathname === '/hlscam')) {
+      const urls = u.searchParams.getAll('hls');
+      if (u.pathname === '/hls') {
+        const cams = (u.searchParams.get('cams') || '1,2,3,4').split(',').map(Number);
+        const chosen = cams.map((n) => {
+          if (!urls[n - 1]) throw new Error(`Câmera ${n} sem URL HLS (recebi ${urls.length} URLs)`);
+          return urls[n - 1];
+        });
+        state.hls = state.hls || createHlsSource({ fetchBytes, presentationDelay, onEvent });
+        const m = await state.hls.refresh(chosen);
+        state.cameras = m.cameras.map((c, i) => ({ ...c, index: cams[i] }));
+        state.merger = null; state.source = 'hls';
+        onEvent({ type: 'manifest', cameras: state.cameras, width: m.width, height: m.height, grid: m.grid, source: 'hls', info: m.info });
+        return te.encode(m.text);
+      }
+      const cam = Number(u.searchParams.get('cam'));
+      if (!urls[cam - 1]) throw new Error(`Câmera ${cam} sem URL HLS`);
+      const src = state.hlsCams[cam] = state.hlsCams[cam] || createHlsSource({ fetchBytes, presentationDelay, onEvent });
+      return te.encode((await src.refresh([urls[cam - 1]], { single: true })).text);
+    }
+    if (u.host === 'camseg') {
+      const [, cam, file] = u.pathname.match(/^\/(\d+)\/(.+)$/) || [];
+      const src = state.hlsCams[Number(cam)];
+      if (!src) throw new Error('mv://camseg pedido antes do manifesto');
+      if (file === 'init.mp4') return src.camInit();
+      return src.camSegment(Number(file.replace('.m4s', '')));
+    }
     if (u.host === 'manifest') {
       const mpdUrl = u.searchParams.get('mpd');
       const xml = td.decode(await fetchBytes(mpdUrl));
       if (u.pathname === '/merge') {
         const cams = (u.searchParams.get('cams') || '1,2,3,4').split(',').map(Number);
         const m = buildMergedMpd(xml, mpdUrl, cams, xmlApi, presentationDelay);
-        state.cameras = m.cameras;
+        state.cameras = m.cameras; state.source = 'dash';
         onEvent({ type: 'manifest', cameras: m.cameras, width: m.width, height: m.height, grid: m.grid });
         return te.encode(m.text);
       }
@@ -140,6 +173,19 @@ export function createMultiviewScheme(shakaNs, opts) {
     }
     if (u.host === 'seg') {
       if (!state.cameras) throw new Error('mv://seg pedido antes do manifesto');
+      if (state.source === 'hls') {
+        if (u.pathname === '/init.mp4') return state.hls.mergedInit();
+        const t = u.pathname.match(/^\/(\d+)\.m4s$/);
+        if (!t) throw httpError(uri, 404, requestType);
+        const t0 = performance.now();
+        const { slot, segs, out } = await state.hls.mergedSegment(Number(t[1]));
+        const ms = performance.now() - t0;
+        const bytesIn = segs.reduce((a, x) => a + x.length, 0);
+        Object.assign(state.stats, { segments: state.stats.segments + 1, mergeMs: state.stats.mergeMs + ms,
+          bytesIn: state.stats.bytesIn + bytesIn, bytesOut: state.stats.bytesOut + out.length });
+        onEvent({ type: 'segment', number: slot.id, ms, bytesIn, bytesOut: out.length, cams: segs.length });
+        return out;
+      }
       const merger = await getMerger();
       if (u.pathname === '/init.mp4') return merger.init;
       const n = u.pathname.match(/^\/(\d+)\.m4s$/);

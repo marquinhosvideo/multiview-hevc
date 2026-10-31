@@ -122,3 +122,16 @@ body[data-mode="merge"] .compare { display: none; }
 .how { margin-top: 14px; color: var(--dim); font-size: 13px; }
 .how summary { cursor: pointer; color: var(--text); }
 .how p { margin: 8px 0; }
+
+.source { margin: 0 24px 14px; color: var(--dim); }
+.source summary { cursor: pointer; color: var(--text); }
+.source summary strong { color: var(--accent); font-weight: 600; }
+.source form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; margin-top: 10px; }
+.hlsurls { display: grid; gap: 6px; flex: 1 1 520px; }
+.hlsurls label { display: grid; grid-template-columns: 52px 1fr; gap: 8px; align-items: center; color: var(--dim); font: 12px var(--mono); }
+.hlsurls input {
+  background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 8px; font: 12px var(--mono); min-width: 0;
+}
+.hlsurls input:focus { outline: none; border-color: var(--accent); }
+.hlsurls .note { margin: 2px 0 0; font-size: 12px; }

@@ -98,3 +98,26 @@ do decode, usando o mapa de tiles.
 O GPAC 2.2 do Ubuntu fez o merge offline, mas o cliente ao vivo caiu
 (segfault / `malloc(): invalid size`). Com o GPAC atual do GitHub (26.08-DEV,
 mesma linha do Homebrew 26.07) tudo funcionou. Use a versão do Homebrew.
+
+
+## HLS como fonte (aprendido ao implementar)
+
+- **SPS e PPS precisam ser byte a byte iguais entre as câmeras.** Até o VUI
+  conta: quatro fontes que diferiam só na sinalização de cor (BT.709 vs não
+  especificado) geraram SPS diferentes e o merge recusou. Em encoders reais,
+  configure a mesma colorimetria, nível e perfil em todos.
+- **Pareamento por `EXT-X-PROGRAM-DATE-TIME`, não por número de sequência.**
+  Encoders independentes numeram os segmentos de forma diferente. Sem PDT, o
+  player só pareia por sequência, e o diagnóstico avisa.
+- **O `tfdt` dos segmentos precisa coincidir entre câmeras.** O merge recusa
+  câmeras cujo relógio de mídia (PTS) está deslocado, com mensagem clara. Se os
+  seus encoders começam o PTS em origens diferentes, é preciso sincronizá-los
+  (relógio/timecode comum) ou normalizar o `tfdt` no cliente (não implementado).
+- **MPEG-TS funciona**, remuxado para fMP4 no cliente: copia os slices e
+  reescreve só a embalagem. Testado, bit a bit, com B-frames (DTS diferente de
+  PTS). Limites: 1 programa, sem criptografia, sem tratar a virada de 33 bits do PTS.
+- **O diagnóstico é a prova.** Ler o SPS (TMVP) é barato, mas não revela os
+  vetores de movimento. Só decodificar e comparar cada tile com a câmera isolada
+  mostra se o encoder respeita as bordas: com TMVP ligado, as câmeras do
+  topo/esquerda divergiram desde o 2º quadro e a do canto inferior direito
+  passou 100%, o mesmo padrão do item 2.
