@@ -164,3 +164,10 @@ mesma linha do Homebrew 26.07) tudo funcionou. Use a versão do Homebrew.
   decodifica tiles lado a lado + WPP (sincroniza as linhas pela largura do quadro); a minha leitura é que a
   especificação sincroniza por tile, mas não confirmei no texto da norma nem em hardware. Saídas seguras:
   `--no-wpp` no encoder, ou CTU 16 (720 = 45 x 16), que permite empilhar.
+- **Duração dos segmentos (canais independentes).** A checagem passou a olhar o par de segmentos, não o
+  último de cada playlist: um segmento isolado fora do padrão (descontinuidade, anúncio) é ignorado com
+  aviso, e o resto toca. O `tfdt` da saída passa a ser o tempo do manifesto (`$Time$`), então buracos e
+  origens de PTS diferentes não afetam o MSE. Se nenhum par bate, o erro lista por canal a duração típica,
+  o número de quadros e de IDR do último segmento, para ver se é GOP diferente, taxa de quadros diferente ou
+  segmento com vários GOPs (esse último caso poderia ser resolvido recortando os segmentos em cada IDR; não
+  implementado).

@@ -7,7 +7,7 @@
 // O Shaka não precisa de nada: ele recebe um MPD comum, com SegmentTimeline e
 // URLs mv://seg/$Time$.m4s.
 
-import { createMerger, gridFor, initTimescale, firstDecodeTime, initCodecString, parseCameraInit } from './hevc-merge.js';
+import { createMerger, gridFor, initTimescale, firstDecodeTime, initCodecString, parseCameraInit, inspectSegment } from './hevc-merge.js';
 import { isMasterPlaylist, parseMaster, pickVariant, parseMedia, alignSlots, independentOffsets } from './hls.js';
 import { looksLikeTs, tsInit, tsToFragment } from './ts-remux.js';
 import { isMpd, parseMpd } from './dash.js';
@@ -77,7 +77,24 @@ function makeCamera(index, url, io) {
 export function createHlsSource(opts) {
   const { fetchBytes, presentationDelay = 6, onEvent = () => {} } = opts;
   const io = { fetchBytes, cached: makeCache(fetchBytes), rendition: () => st.rendition };
-  const st = { allowWppRow: false, rendition: 'highest', sync: null, offsets: null, cams: [], merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map(), info: null };
+  const st = { skipped: 0, allowWppRow: false, rendition: 'highest', sync: null, offsets: null, cams: [], merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map(), info: null };
+
+  // Mensagem para quando nenhum par de segmentos tem a mesma duração: mostra, por canal, o que cada um faz.
+  async function explainDurations(lists) {
+    const med = (a) => [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)];
+    const lines = await Promise.all(lists.map(async (l, i) => {
+      const ds = l.segments.map((s) => s.dur);
+      let info = '';
+      try {
+        const cam = st.cams[i];
+        await cam.ensureInit(l.segments[l.segments.length - 1].uri);
+        const r = inspectSegment(await cam.segment(l.segments[l.segments.length - 1].uri));
+        info = `, último segmento: ${r.frames} quadros, ${r.irap} IDR/IRAP`;
+      } catch { /* sem detalhe */ }
+      return `CAM ${i + 1}: segmentos de ${med(ds).toFixed(2)}s (${Math.min(...ds).toFixed(2)}–${Math.max(...ds).toFixed(2)}s)${info}`;
+    }));
+    return `nenhum segmento tem a mesma duração nos canais. ${lines.join(' · ')}. Para costurar, os canais precisam ter segmentos/GOPs com a mesma duração e o mesmo número de quadros`;
+  }
 
   // Relê as playlists e devolve o MPD virtual do canvas (ou de uma câmera só).
   async function refresh(urls, { single = false, sync = 'auto', rendition = 'highest', wppRow = false } = {}) {
@@ -107,11 +124,10 @@ export function createHlsSource(opts) {
         }
         aligned = alignSlots(lists, { offsets: st.offsets });
       }
-      if (aligned.mode === 'independent') {
-        const durs = lists.map((l) => l.segments[l.segments.length - 1].dur);
-        if (Math.max(...durs) - Math.min(...durs) > 0.05 * Math.max(...durs)) {
-          throw new Error(`duração dos segmentos diferente entre as câmeras (${durs.map((d) => d.toFixed(2) + 's').join(' / ')}): os GOPs precisam ter o mesmo tamanho para costurar`);
-        }
+      if (aligned.mode === 'independent' && !aligned.slots.length) throw new Error(await explainDurations(lists));
+      if (aligned.skipped && aligned.skipped !== st.skipped) {
+        st.skipped = aligned.skipped;
+        onEvent({ type: 'warning', message: `${aligned.skipped} segmento(s) ignorado(s): duração diferente entre os canais (descontinuidade ou anúncio?)` });
       }
     }
     if (!aligned.slots.length) throw new Error('nenhum segmento em comum entre as câmeras: as playlists não se sobrepõem');
@@ -201,7 +217,7 @@ export function createHlsSource(opts) {
     async mergedSegment(t) {
       const slot = slotFor(t);
       const segs = await Promise.all(st.cams.map((c, i) => c.segment(slot.uris[i])));
-      return { slot, segs, out: st.merger.mergeSegment(segs, { ignoreTime: st.offsets !== null }) };
+      return { slot, segs, out: st.merger.mergeSegment(segs, st.offsets !== null ? { ignoreTime: true, baseTime: t } : {}) };
     },
     async camSegment(t) {
       const slot = slotFor(t);

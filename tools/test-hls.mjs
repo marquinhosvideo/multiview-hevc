@@ -175,6 +175,34 @@ check(r4.events.some((e) => e.type === 'manifest' && e.info.containers.every((c)
   void call;
 }
 
+// Segmento isolado fora do padrão (EXTINF 3,71 s num canal de 2 s): é ignorado, o resto toca, e o tfdt da
+// saída segue o manifesto (contínuo, mesmo com o buraco). Se NENHUM segmento bate, o erro explica cada canal.
+{
+  const dir1 = join(work, 'indep', 'cam1');
+  const base1 = readFileSync(join(dir1, 'index.m3u8'), 'utf8');
+  let k = 0;
+  writeFileSync(join(dir1, 'odd.m3u8'), base1.replace(/#EXTINF:[\d.]+,/g, (m) => (k++ === 1 ? '#EXTINF:3.710000,' : m)));
+  writeFileSync(join(dir1, 'long.m3u8'), base1.replace(/#EXTINF:[\d.]+,/g, '#EXTINF:3.710000,'));
+  const evs = [];
+  const { plugin } = createMultiviewScheme(fakeShaka, { fetchBytes, xmlApi: null, onEvent: (e) => evs.push(e) });
+  const call = async (uri) => new Uint8Array((await plugin(uri, { uris: [uri] }, 0).promise).data);
+  const mk = (first) => [first, ...[2, 3, 4].map((n) => `${base}/indep/cam${n}/index.m3u8`)].map((u) => `&hls=${encodeURIComponent(u)}`).join('');
+  const mpdOdd = new TextDecoder().decode(await call(`mv://manifest/hls?cams=1,2,3,4&sync=independent${mk(`${base}/indep/cam1/odd.m3u8`)}`));
+  const ts = [...mpdOdd.matchAll(/<S t="(\d+)"/g)].map((x) => Number(x[1]));
+  check(ts.length === 2, `segmento isolado de 3,71 s ignorado: ${ts.length} de 3 segmentos seguem`);
+  check(evs.some((e) => e.type === 'warning' && /ignorado/.test(e.message)), 'avisa que ignorou o segmento fora do padrão');
+  const { firstDecodeTime } = await import('../web/hevc-merge.js');
+  let contiguous = true;
+  for (const t of ts) { const seg = await call(`mv://seg/${t}.m4s`); if (firstDecodeTime(seg) !== t) contiguous = false; }
+  check(contiguous, 'tfdt de cada segmento mergeado = tempo do manifesto (sem buraco)');
+  const p2 = createMultiviewScheme(fakeShaka, { fetchBytes, xmlApi: null }).plugin;
+  try { await p2(`mv://manifest/hls?cams=1,2,3,4&sync=independent${mk(`${base}/indep/cam1/long.m3u8`)}`, { uris: [] }, 0).promise; check(false, 'durações todas diferentes deveriam recusar'); }
+  catch (e) {
+    const msg = String(e.data && e.data[1] && e.data[1].message);
+    check(/CAM 1: segmentos de 3\.71s/.test(msg) && /CAM 2: segmentos de 2\.00s/.test(msg) && /60 quadros/.test(msg), 'sem nenhum segmento compatível: o erro mostra duração, quadros e IDR de cada canal');
+  }
+}
+
 // Mistura: 3 câmeras fMP4 (1 fragmento por quadro) + 1 em TS (1 fragmento por segmento).
 // O TS começa o PTS em 1,4 s e o fMP4 em 0: com relógios diferentes, o modo estrito recusa e o independente aceita.
 {

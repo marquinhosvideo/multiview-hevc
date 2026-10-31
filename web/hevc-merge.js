@@ -664,8 +664,27 @@ function flattenFragments(bytes, moofs) {
   return { ...f0, version: 1, flags: 0x1 | 0x100 | 0x200 | 0x400 | 0x800, firstFlags: undefined, samples };
 }
 
+// Resumo de um segmento fMP4: quadros, quantos começam num IRAP (IDR/CRA/BLA = quantos GOPs) e duração em ticks.
+export function inspectSegment(bytes) {
+  const moofs = parseBoxes(bytes).filter((b) => b.type === 'moof');
+  if (!moofs.length) throw new Error('segmento sem moof');
+  const f = flattenFragments(bytes, moofs);
+  let irap = 0;
+  for (const smp of f.samples) {
+    if (splitNals(smp.bytes).some((n) => { const t = nalType(n); return t >= 16 && t <= 21; })) irap++;
+  }
+  return { frames: f.samples.length, irap, ticks: f.samples.reduce((a, x) => a + x.dur, 0) };
+}
+
+// opts.baseTime: força o tfdt da saída (modo independente: o tempo é o do manifesto, não o de nenhuma câmera).
 // opts.ignoreTime: câmeras independentes têm origens de tempo diferentes (tfdt); a saída usa o
 // tempo da câmera 1 e os quadros são pareados por posição. A contagem de quadros ainda tem de bater.
+function tfdtAt(t) {
+  const d = new Uint8Array(12);
+  d[0] = 1; writeU32(d, 4, Math.floor(t / 2 ** 32)); writeU32(d, 8, t % 2 ** 32);
+  return d;
+}
+
 function mergeSegment(cams, tiles, addrBits, segments, opts = {}) {
   if (segments.length !== cams.length) throw new Error('número de segmentos diferente do número de câmeras');
   const parsed = segments.map((s) => ({ bytes: s, boxes: parseBoxes(s) }));
@@ -682,9 +701,11 @@ function mergeSegment(cams, tiles, addrBits, segments, opts = {}) {
   if (styp) out.push(serialize(styp));
   const { sps, pps } = cams[0];
 
+  let firstDecode;
   for (let f = 0; f < nFrag; f++) {
     const frags = fragsPerCam ? fragsPerCam.map((l) => l[f]) : parsed.map((p, k) => readFragment(p.bytes, moofsPerCam[k][f]));
     const f0 = frags[0];
+    if (f === 0) firstDecode = f0.decodeTime;
     for (let k = 1; k < frags.length; k++) {
       if (frags[k].samples.length !== f0.samples.length) {
         throw new Error(`câmera ${k + 1} com ${frags[k].samples.length} quadros no segmento e a câmera 1 com ${f0.samples.length}: ` +
@@ -742,7 +763,7 @@ function mergeSegment(cams, tiles, addrBits, segments, opts = {}) {
         { type: 'mfhd', data: f0.mfhd.data },
         { type: 'traf', prefix: new Uint8Array(0), children: [
           { type: 'tfhd', data: tfhd },
-          { type: 'tfdt', data: f0.tfdtBox.data },
+          { type: 'tfdt', data: opts.baseTime !== undefined ? tfdtAt(opts.baseTime + (f0.decodeTime - firstDecode)) : f0.tfdtBox.data },
           { type: 'trun', data: trun },
         ] },
       ],

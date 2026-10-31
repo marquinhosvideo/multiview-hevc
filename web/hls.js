@@ -114,17 +114,22 @@ export function alignSlots(playlists, opts = {}) {
   const ref = playlists[0];
   if (opts.offsets) {
     const slots = [];
+    let skipped = 0;
     for (const s of ref.segments) {
-      const uris = [s.uri];
+      const uris = [s.uri], durs = [s.dur];
       let ok = true;
       for (const [k, p] of playlists.slice(1).entries()) {
         const m = p.segments.find((c) => c.seq === s.seq + opts.offsets[k + 1]);
         if (!m) { ok = false; break; }
-        uris.push(m.uri);
+        uris.push(m.uri); durs.push(m.dur);
       }
-      if (ok) slots.push({ id: s.seq, uris, dur: s.dur, pdt: null });
+      if (!ok) continue;
+      // Só se costuram segmentos com a mesma duração (mesmo número de quadros): um segmento isolado
+      // fora do padrão (descontinuidade, ad break) é ignorado em vez de derrubar o multiview.
+      if (Math.max(...durs) - Math.min(...durs) > 0.05 * Math.max(...durs)) { skipped++; continue; }
+      slots.push({ id: s.seq, uris, dur: s.dur, pdt: null });
     }
-    return { mode: 'independent', slots, skew: 0 };
+    return { mode: 'independent', slots, skew: 0, skipped };
   }
   const allPdt = playlists.every((p) => p.segments.every((s) => s.pdt !== null));
   const mode = allPdt ? 'pdt' : 'seq';
