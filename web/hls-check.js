@@ -45,6 +45,9 @@ export async function diagnose(urls, { fetchBytes, segments = 3, sync = 'auto' }
     add('warn', `CAM ${cams.find((c) => c.tmvp).index}: TMVP ligado no SPS; a predição temporal de vetor pode cruzar a borda do tile (só a prova bit a bit confirma)`);
   } else add('ok', 'TMVP desligado em todas as câmeras');
 
+  if (source.state.merger && source.state.merger.wpp) {
+    add('warn', 'WPP ligado nos canais: mantive o WPP e empilhei os tiles na vertical (1 coluna), porque tiles lado a lado + WPP quebra o decode. Tiles + WPP no mesmo stream é raro e alguns decoders de hardware recusam; se o vídeo não tocar, desligue o WPP no encoder');
+  }
   const times = [...source.state.slotsByTime.keys()].slice(-segments);
   const merged = [];
   for (const t of times) {

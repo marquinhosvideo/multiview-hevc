@@ -130,7 +130,7 @@ export function createHlsSource(opts) {
         st.mergerKey = key;
         onEvent({ type: 'merger', width: st.merger.width, height: st.merger.height, tiles: st.merger.tiles });
       }
-      width = st.merger.width; height = st.merger.height; grid = gridFor(st.cams.length);
+      width = st.merger.width; height = st.merger.height; grid = { cols: st.merger.cols, rows: st.merger.rows };
       codecs = initCodecString(st.cams[0].init);
     }
     bandwidth = 5_000_000 * st.cams.length; // só informativo: o ABR está desligado

@@ -30,6 +30,14 @@ for (const [i, src] of sources.entries()) {
     '-vf', 'format=yuv420p,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv', '-c:v', 'libx265', '-x265-params', 'keyint=1:slices=1:no-wpp=1:repeat-headers=1:log-level=error',
     '-tag:v', 'hvc1', join(work, `cam${i + 1}.mp4`)]);
 }
+// Câmeras com WPP ligado (padrão do x265): o merge mantém o WPP e copia os entry points.
+for (let n = 1; n <= 4; n++) {
+  sh('ffmpeg', ['-v', 'error', '-y', '-i', join(work, `cam${n}.mp4`), '-vf', 'setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv', '-c:v', 'libx265',
+    '-x265-params', 'keyint=1:slices=1:wpp=1:repeat-headers=1:log-level=error', '-tag:v', 'hvc1', join(work, `wpp${n}.mp4`)]);
+  const dir = join(work, 'wpp', `cam${n}`); mkdirSync(dir, { recursive: true });
+  sh('ffmpeg', ['-v', 'error', '-y', '-i', join(work, `wpp${n}.mp4`), '-c', 'copy', '-f', 'hls', '-hls_time', '2', '-hls_playlist_type', 'vod',
+    '-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', 'init.mp4', '-hls_segment_filename', join(dir, 'seg_%d.m4s'), join(dir, 'index.m3u8')]);
+}
 for (const kind of ['fmp4', 'ts']) {
   for (let n = 1; n <= 4; n++) {
     const dir = join(work, kind, `cam${n}`); mkdirSync(dir, { recursive: true });
@@ -186,6 +194,26 @@ await run('HLS + DASH misturados', [`${base}/fmp4/cam1/index.m3u8`, `${base}/fmp
   refuse(live('', '<SegmentList/>').replace('codecs="hvc1.1.6.L93.B0"', 'codecs="hvc1.1.6.L93.B0"'), /SegmentList/, 'parseMpd recusa SegmentList com mensagem clara');
   refuse(live().replace('hvc1.1.6.L93.B0', 'avc1.64001f'), /H\.264/, 'parseMpd recusa canal H.264 com mensagem clara');
   refuse(live('', '<SegmentBase indexRange="0-1"/>'), /on-demand|SegmentTemplate/, 'parseMpd recusa SegmentBase (arquivo único)');
+}
+
+// WPP: as câmeras com WPP ligado são costuradas sem recusa; compara com a câmera WPP decodificada sozinha.
+{
+  const { plugin } = createMultiviewScheme(fakeShaka, { fetchBytes, xmlApi: null });
+  const call = async (uri) => new Uint8Array((await plugin(uri, { uris: [uri] }, 0).promise).data);
+  const q = [1, 2, 3, 4].map((n) => `&hls=${encodeURIComponent(`${base}/wpp/cam${n}/index.m3u8`)}`).join('');
+  const m = new TextDecoder().decode(await call(`mv://manifest/hls?cams=1,2,3,4&sync=independent${q}`));
+  const times = [...m.matchAll(/<S t="(\d+)"/g)].map((x) => Number(x[1]));
+  const parts = [await call('mv://seg/init.mp4')];
+  for (const t of times) parts.push(await call(`mv://seg/${t}.m4s`));
+  const out = join(work, 'wpp_merged.mp4'); writeFileSync(out, Buffer.concat(parts));
+  const pos = [[0, 0], [0, H], [0, 2 * H], [0, 3 * H]]; // WPP: tiles empilhados em 1 coluna
+  check(/width="1024"/.test(m) && /height="2304"/.test(m), 'com WPP o canvas é 1024x2304 (1 coluna)');
+  for (let n = 1; n <= 4; n++) {
+    const ref = frameMd5(join(work, `wpp${n}.mp4`));
+    const got = frameMd5(out, `crop=${W}:${H}:${pos[n - 1][0]}:${pos[n - 1][1]}`);
+    const same = ref.filter((h, i) => h === got[i]).length;
+    check(same === ref.length && got.length === ref.length, `WPP cam${n}: ${same}/${ref.length} quadros idênticos à câmera isolada`);
+  }
 }
 
 // Modo comparação: 1 câmera, sem merge.

@@ -135,3 +135,12 @@ mesma linha do Homebrew 26.07) tudo funcionou. Use a versão do Homebrew.
   uma playlist HLS (segmentos, init, duração, PDT derivado do `availabilityStartTime`), então
   o pareamento e o merge não mudam. Os números de sequência são consecutivos e estáveis
   entre atualizações do MPD (mapa `t -> seq` mantido por canal).
+- **WPP nos canais (atualização do item 3).** O merge agora aceita câmeras com WPP: mantém
+  o `entropy_coding_sync` e copia os entry points do slice header (cada câmera vira um slice
+  que ocupa um tile inteiro, com as mesmas linhas de CTU). Mas tiles **lado a lado** + WPP
+  dão `cu_qp_delta outside the valid range` no FFmpeg (a sincronização das linhas assume a
+  largura do quadro), então, com WPP, o canvas empilha os tiles em **1 coluna** (ex.: 4 canais
+  1024x576 -> 1024x2304). Testado: 180/180 quadros idênticos no FFmpeg. Os layouts da página só
+  recortam o frame, então a disposição não muda nada para quem assiste. Não testado: decoders de
+  hardware, que podem recusar tiles + WPP no mesmo stream; se for o caso, desligue o WPP no
+  encoder (`--no-wpp`).

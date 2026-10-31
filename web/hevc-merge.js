@@ -202,7 +202,6 @@ export function parsePps(nal) {
   p.tilesEnabled = r.flag();
   p.entropyCodingSync = r.flag();
   if (p.tilesEnabled) throw new Error('A câmera já usa tiles; o merge espera 1 tile por câmera');
-  if (p.entropyCodingSync) throw new Error('A câmera usa WPP (entropy_coding_sync); encode com --no-wpp');
   p.posAfterTiles = r.pos;
   p.loopFilterAcrossSlices = r.flag();
   p.deblockingOverrideEnabled = false;
@@ -244,7 +243,7 @@ function buildCanvasPps(pps, cols, rows) {
   const w = new BitWriter();
   w.copy(pps.rbsp, 0, pps.posTiles);
   w.bit(1); // tiles_enabled_flag
-  w.bit(0); // entropy_coding_sync_enabled_flag
+  w.bit(pps.entropyCodingSync ? 1 : 0); // WPP da câmera é mantido: cada tile continua com suas linhas de CTU
   w.ue(cols - 1); w.ue(rows - 1);
   w.bit(1); // uniform_spacing_flag
   w.bit(0); // loop_filter_across_tiles_enabled_flag
@@ -309,7 +308,14 @@ function rewriteSlice(nal, sps, pps, isFirst, ctbAddr, addrBits) {
   if (pps.loopFilterAcrossSlices && (saoLuma || saoChroma || !deblockDisabled)) r.skip(1);
   const midEnd = r.pos;
 
-  // A câmera não tinha tiles nem WPP, então não há entry points aqui.
+  // Entry points: sem WPP não há (1 slice = 1 tile). Com WPP, o tile tem as mesmas linhas de CTU
+  // que o quadro da câmera tinha, então os offsets valem como estão e são copiados.
+  let epStart = r.pos, epEnd = r.pos;
+  if (pps.entropyCodingSync) {
+    const n = r.ue();
+    if (n > 0) { const len = r.ue() + 1; r.skip(len * n); }
+    epEnd = r.pos;
+  }
   let extStart = r.pos, extEnd = r.pos;
   if (pps.sliceHeaderExtPresent) { const len = r.ue(); extStart = r.pos; r.skip(len * 8); extEnd = r.pos; }
   // byte_alignment(): 1 + zeros
@@ -327,7 +333,8 @@ function rewriteSlice(nal, sps, pps, isFirst, ctbAddr, addrBits) {
     w.u(addrBits, ctbAddr);
   }
   w.copy(rbsp, midStart, midEnd);
-  w.ue(0); // num_entry_point_offsets: 1 slice = 1 tile
+  if (pps.entropyCodingSync) w.copy(rbsp, epStart, epEnd);
+  else w.ue(0); // num_entry_point_offsets: 1 slice = 1 tile
   if (pps.sliceHeaderExtPresent) { w.ue((extEnd - extStart) >> 3); w.copy(rbsp, extStart, extEnd); }
   w.trailing();
   const head = w.bytes();
@@ -491,7 +498,10 @@ export function createMerger(cameraInits) {
   if (sps.width % sps.ctbSize || sps.height % sps.ctbSize) {
     throw new Error(`Tile ${sps.width}x${sps.height} não é múltiplo do CTU (${sps.ctbSize})`);
   }
-  const { cols, rows } = gridFor(cams.length);
+  // Com WPP, tiles lado a lado perdem o sincronismo do CABAC em decoders reais (a sincronização das
+  // linhas de CTU assume a largura do quadro); empilhados em 1 coluna o tile tem a largura do quadro e
+  // o decode é o do WPP normal. Os layouts da página só recortam o frame, então a disposição não importa.
+  const { cols, rows } = c0.pps.entropyCodingSync ? { cols: 1, rows: cams.length } : gridFor(cams.length);
   const width = sps.width * cols, height = sps.height * rows;
   const picWCtbs = width / sps.ctbSize, picHCtbs = height / sps.ctbSize;
   const addrBits = Math.ceil(Math.log2(picWCtbs * picHCtbs));
@@ -522,6 +532,7 @@ export function createMerger(cameraInits) {
   return {
     width, height, cols, rows, tiles, init,
     codecTile: { width: sps.width, height: sps.height, ctb: sps.ctbSize },
+    wpp: c0.pps.entropyCodingSync,
     mergeSegment: (segments, opts) => mergeSegment(cams, tiles, addrBits, segments, opts),
   };
 }

@@ -273,6 +273,8 @@ Detalhes e evidências em [`docs/APRENDIZADOS.md`](docs/APRENDIZADOS.md).
 
 ## Limitações (de propósito)
 
+- Canais com WPP: o merge os aceita empilhando os tiles em 1 coluna (ver `docs/APRENDIZADOS.md`);
+  decoders de hardware podem recusar tiles + WPP. O contrato original (`--no-wpp`) continua o mais seguro.
 - Há dois players: o GPAC (prova técnica, conta decoders) e o Shaka na página
   web. Android (Media3/MediaCodec) e iOS/tvOS (VideoToolbox) ficam para a
   próxima fase ([`docs/PLANO.md`](docs/PLANO.md)).
