@@ -11,9 +11,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createHlsSource } from '../web/hls-source.js';
+import { diagnose } from '../web/hls-check.js';
 import { fetchBytes } from '../web/mv-shaka.js';
-import { parseCameraInit, initCodecString } from '../web/hevc-merge.js';
 
 const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(name); if (i < 0) return def; const v = args[i + 1]; args.splice(i, 2); return v; };
@@ -28,47 +27,23 @@ if (urls.length !== 2 && urls.length !== 4) {
 const mark = { ok: '\x1b[32m✔\x1b[0m', warn: '\x1b[33m!\x1b[0m', bad: '\x1b[31m✘\x1b[0m' };
 const res = { bad: 0, warn: 0 };
 const say = (kind, msg) => { console.log(`${mark[kind]} ${msg}`); if (kind !== 'ok') res[kind]++; };
-const events = [];
-const src = createHlsSource({ fetchBytes, onEvent: (e) => events.push(e) });
 
-let m;
-try { m = await src.refresh(urls); }
-catch (e) {
-  say('bad', `não consegui montar o merge: ${e.message}`);
+const d = await diagnose(urls, { fetchBytes, segments: nSeg });
+if (!d.ok && !d.canvas) {
+  for (const c of d.checks) say(c.kind, c.msg);
   console.log('\nVeredito: com estes streams o merge NÃO funciona como estão.');
   process.exit(1);
 }
-for (const e of events) if (e.type === 'warning') say('warn', e.message);
+const { source: src, merged, cams } = d;
+const m = { grid: d.canvas.grid, info: d.info, width: d.canvas.width, height: d.canvas.height };
 
 console.log(`\nCanvas: ${m.width}x${m.height} (grade ${m.grid.cols}x${m.grid.rows}) · alinhamento por ${m.info.mode === 'pdt' ? 'EXT-X-PROGRAM-DATE-TIME' : 'número de sequência'} · ${m.info.slots} segmentos em comum · ${m.info.live ? 'ao vivo' : 'VOD'}\n`);
 console.log('cam  container  perfil/nível        tile       CTU  TMVP  bits  codec');
-for (const cam of src.state.cams) {
-  const c = parseCameraInit(cam.init), h = c.hvcC.header;
-  console.log(`${String(cam.index).padEnd(4)} ${cam.container.padEnd(10)} ${`prof ${h[1] & 31}, nível ${(h[12] / 30).toFixed(1)}`.padEnd(19)} ${`${c.sps.width}x${c.sps.height}`.padEnd(10)} ${String(c.sps.ctbSize).padEnd(4)} ${(c.sps.temporalMvpEnabled ? 'LIGADO' : 'off').padEnd(5)} ${c.sps.bitDepthLuma}    ${initCodecString(cam.init)}`);
+for (const c of cams) {
+  console.log(`${String(c.index).padEnd(4)} ${c.container.padEnd(10)} ${`prof ${c.profile}, nível ${c.level.toFixed(1)}`.padEnd(19)} ${`${c.width}x${c.height}`.padEnd(10)} ${String(c.ctb).padEnd(4)} ${(c.tmvp ? 'LIGADO' : 'off').padEnd(5)} ${c.bits}    ${c.codec}`);
 }
 console.log('');
-
-// ---- verificações estruturais
-const cams = src.state.cams.map((c) => ({ ...c, ...parseCameraInit(c.init) }));
-if (cams.every((c) => c.container === 'fmp4')) say('ok', 'segmentos fMP4/CMAF: sem conversão');
-else say('ok', `segmentos ${cams.map((c) => c.container.toUpperCase()).join('/')}: remuxados para fMP4 no cliente (sem recodificar)`);
-if (cams.every((c) => c.sps.width % 64 === 0 && c.sps.height % 64 === 0)) say('ok', `tile ${cams[0].sps.width}x${cams[0].sps.height}: múltiplo de 64`);
-else say('bad', `tile ${cams[0].sps.width}x${cams[0].sps.height}: largura/altura precisam ser múltiplos de 64`);
-if (m.info.mode === 'pdt') say(m.info.skew <= 40 ? 'ok' : 'warn', `desvio de relógio entre câmeras (PDT): até ${m.info.skew.toFixed(0)} ms`);
-else say('warn', 'sem EXT-X-PROGRAM-DATE-TIME: o pareamento depende de as câmeras numerarem os segmentos de forma idêntica');
-for (const c of cams) {
-  if (c.sps.temporalMvpEnabled) { say('warn', `CAM ${c.index}: TMVP ligado no SPS (predição temporal de vetor pode cruzar a borda do tile)`); break; }
-}
-if (cams.every((c) => !c.sps.temporalMvpEnabled)) say('ok', 'TMVP desligado em todas as câmeras');
-
-// ---- tentativa de merge nos últimos N segmentos
-const times = [...src.state.slotsByTime.keys()].slice(-nSeg);
-const merged = [];
-for (const t of times) {
-  try { const r = await src.mergedSegment(t); merged.push({ t, ...r }); }
-  catch (e) { say('bad', `merge do segmento ${t}: ${e.message}`); }
-}
-if (merged.length === times.length) say('ok', `merge estrutural: ${merged.length} segmentos costurados (1 slice/quadro, IDR e tempos alinhados)`);
+for (const c of d.checks) say(c.kind, c.msg);
 
 // ---- prova definitiva: decodificar e comparar tile a tile
 const hasFfmpeg = (() => { try { execFileSync('ffmpeg', ['-version'], { stdio: 'ignore' }); return true; } catch { return false; } })();
@@ -76,14 +51,14 @@ if (merged.length && !noDecode && hasFfmpeg) {
   const dir = mkdtempSync(join(tmpdir(), 'mv-check-'));
   const md5 = (file, vf) => execFileSync('ffmpeg', ['-v', 'error', '-i', file, ...(vf ? ['-vf', vf] : []), '-f', 'framemd5', '-'], { maxBuffer: 1 << 28 })
     .toString().split('\n').filter((l) => l && !l.startsWith('#')).map((l) => l.split(',')[5].trim());
-  const tw = cams[0].sps.width, th = cams[0].sps.height;
+  const tw = cams[0].width, th = cams[0].height;
   const per = cams.map(() => ({ same: 0, total: 0, first: null }));
   for (const [k, seg] of merged.entries()) {
     const out = join(dir, `merged_${k}.mp4`);
     writeFileSync(out, Buffer.concat([src.mergedInit(), seg.out]));
     for (const [i, c] of cams.entries()) {
       const camFile = join(dir, `cam${c.index}_${k}.mp4`);
-      writeFileSync(camFile, Buffer.concat([c.init, seg.segs[i]]));
+      writeFileSync(camFile, Buffer.concat([src.state.cams[i].init, seg.segs[i]]));
       const ref = md5(camFile);
       const col = i % m.grid.cols, row = Math.floor(i / m.grid.cols);
       const got = md5(out, `crop=${tw}:${th}:${col * tw}:${row * th}`);

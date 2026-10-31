@@ -135,3 +135,7 @@ body[data-mode="merge"] .compare { display: none; }
 }
 .hlsurls input:focus { outline: none; border-color: var(--accent); }
 .hlsurls .note { margin: 2px 0 0; font-size: 12px; }
+
+.chk { display: inline-flex; gap: 8px; align-items: flex-start; cursor: pointer; color: var(--text); }
+.chk small { color: var(--dim); }
+.source a { color: var(--accent); }

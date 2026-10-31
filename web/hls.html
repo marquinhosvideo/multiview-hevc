@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multiview HEVC · entrada HLS</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="hls-page.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>Entrada HLS <span class="dim">· 4 streams, 1 decoder</span></h1>
+    <p class="sub">Cole as 4 playlists <code>.m3u8</code>, confira se dá para costurar e toque o multiview.</p>
+  </div>
+  <div class="pills"><a class="pill" href="index.html">player (DASH local)</a></div>
+</header>
+
+<main class="hls-main">
+  <form id="form" class="card" autocomplete="off">
+    <h2>1 · Streams <span class="dim">(uma câmera por campo, na ordem do mosaico)</span></h2>
+    <div class="fields" id="fields">
+      <label><span>CAM 1</span><input name="u1" type="url" placeholder="https://servidor/cam1/index.m3u8" spellcheck="false" required></label>
+      <label><span>CAM 2</span><input name="u2" type="url" placeholder="https://servidor/cam2/index.m3u8" spellcheck="false" required></label>
+      <label><span>CAM 3</span><input name="u3" type="url" placeholder="https://servidor/cam3/index.m3u8" spellcheck="false" required></label>
+      <label><span>CAM 4</span><input name="u4" type="url" placeholder="https://servidor/cam4/index.m3u8" spellcheck="false" required></label>
+    </div>
+    <p class="tip">Dica: copie as 4 URLs (uma por linha) e cole no primeiro campo; elas se distribuem sozinhas.</p>
+
+    <div class="opts">
+      <label class="chk"><input type="checkbox" id="proxy"> <span>Passar pelo servidor local <small id="proxyNote">(contorna CORS e alcança o que só a sua rede/VPN enxerga)</small></span></label>
+      <button type="button" class="btn ghost" id="fillLocal">Usar o HLS local (<code>make hls-server</code>)</button>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="btn primary" id="check">Verificar streams</button>
+      <button type="button" class="btn" id="play" disabled>Tocar multiview</button>
+    </div>
+  </form>
+
+  <section class="card" id="result" hidden>
+    <h2>2 · Resultado</h2>
+    <p class="status" id="status"></p>
+    <div class="tablewrap"><table id="camTable"></table></div>
+    <ul class="checks" id="checks"></ul>
+    <div class="verdict" id="verdict"></div>
+  </section>
+</main>
+
+<script type="module" src="hls-page.js"></script>
+</body>
+</html>

@@ -26,7 +26,7 @@ help:
 	@echo "  Fonte HLS (4 streams .m3u8, por exemplo do Elemental Live):"
 	@echo "  make check-hls HLS=\"url1 url2 url3 url4\"   diagnostica se os streams são mergeáveis (inclui prova bit a bit)"
 	@echo "  make hls-server    [terminal 1] publica as 4 câmeras locais como HLS ao vivo (HLS_FORMAT=ts para MPEG-TS)"
-	@echo "  make web-hls       [terminal 2] player web já apontado para o HLS local"
+	@echo "  make web-hls       [terminal 2] abre a página de entrada HLS: cole os 4 streams, verifique e toque"
 	@echo "  make hls-test      testa o caminho HLS (fMP4 e TS) sem navegador, bit a bit (precisa de Node 18+ e ffmpeg)"
 	@echo ""
 	@echo "  Variáveis úteis: CAMS=1,4  BITRATE=4000000  CLIP_SECONDS=30  LIVE_PORT=8080"

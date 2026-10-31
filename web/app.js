@@ -12,6 +12,9 @@ function storedLayout() {
   try { const v = localStorage.getItem('mv.layout'); return LAYOUTS.includes(v) ? v : 'grid'; } catch { return 'grid'; }
 }
 
+function storedProxy() {
+  try { return JSON.parse(localStorage.getItem('mv.proxy')) === true; } catch { return false; }
+}
 function storedHls() {
   try { const v = JSON.parse(localStorage.getItem('mv.hls') || 'null'); if (Array.isArray(v) && v.length === 4) return v; } catch { /* ignora */ }
   return ['', '', '', ''];
@@ -27,6 +30,7 @@ function hlsFromUrl() {
 const ui = {
   source: hlsFromUrl() ? 'hls' : 'dash',
   hls: hlsFromUrl() || storedHls(),
+  proxy: params.has('proxy') ? params.get('proxy') === '1' : storedProxy(),
   mode: params.get('mode') === 'compare' ? 'compare' : 'merge',
   layout: LAYOUTS.includes(params.get('layout')) ? params.get('layout') : storedLayout(),
   cams: params.get('cams') || '1,2,3,4',
@@ -58,8 +62,10 @@ if (!shaka.Player.isBrowserSupported()) {
   banner('Este navegador não decodifica <b>HEVC via MSE</b>. No Mac, use <b>Safari</b> ou <b>Chrome</b> recente. O Firefox normalmente não toca HEVC.');
 }
 
+// HLS de outra origem: com o proxy local (scripts/web_server.py) o navegador não esbarra em CORS.
+const viaProxy = (u) => fetchBytes(`/proxy?url=${encodeURIComponent(u)}`);
 const scheme = createMultiviewScheme(shaka, {
-  fetchBytes,
+  fetchBytes: (u) => (ui.source === 'hls' && ui.proxy ? viaProxy(u) : fetchBytes(u)),
   xmlApi: { DOMParser, XMLSerializer },
   presentationDelay: Number(params.get('delay') || 6),
   onEvent(e) {
@@ -371,6 +377,7 @@ function showSource() {
   $('#hlsUrls').hidden = !hls;
   setOn('#sourceKind', 'source', ui.source);
   ui.hls.forEach((u, i) => { document.querySelector(`[name="hls${i + 1}"]`).value = u; });
+  $('#proxyChk').checked = ui.proxy;
   if (hls) $('#source').open = !ui.hls.every(Boolean);
 }
 for (const b of document.querySelectorAll('#sourceKind [data-source]')) {
@@ -381,7 +388,8 @@ $('#sourceForm').addEventListener('submit', (e) => {
   if (ui.source === 'hls') {
     ui.hls = [1, 2, 3, 4].map((n) => document.querySelector(`[name="hls${n}"]`).value.trim());
     if (!ui.hls.every(Boolean)) { banner('Preencha as 4 URLs HLS (uma por câmera).'); return; }
-    try { localStorage.setItem('mv.hls', JSON.stringify(ui.hls)); } catch { /* sem storage */ }
+    ui.proxy = $('#proxyChk').checked;
+    try { localStorage.setItem('mv.hls', JSON.stringify(ui.hls)); localStorage.setItem('mv.proxy', JSON.stringify(ui.proxy)); } catch { /* sem storage */ }
   }
   banner('');
   start();

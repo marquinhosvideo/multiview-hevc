@@ -179,14 +179,31 @@ relógio de cada câmera e, com o `ffmpeg`, **decodifica o resultado e compara c
 tile, quadro a quadro, com a câmera decodificada sozinha**. Essa é a única forma
 de saber se os vetores de movimento do encoder respeitam as bordas do tile.
 
-Para tocar, cole as 4 URLs em *Fonte do vídeo* na página (ou use
-`?hls=url1,url2,url3,url4`). O servidor dos streams precisa liberar **CORS**.
+**Interface web para colar os 4 streams:**
+
+```bash
+make web-hls     # abre http://127.0.0.1:8081/hls.html
+```
+
+Cole as 4 URLs (ou as 4 de uma vez, uma por linha, no primeiro campo), clique em
+*Verificar streams* e depois em *Tocar multiview*. A verificação da página é
+estrutural (container, tile, TMVP, relógio, merge dos últimos segmentos); a prova
+bit a bit continua sendo o `make check-hls`, porque exige decodificar.
+
+**CORS.** O navegador bloqueia HLS de outro domínio se o servidor não enviar
+CORS, o que é comum em encoders e CDNs. O servidor do `make web` tem um **proxy
+local** (`/proxy?url=...`): a página busca os streams por ele, na mesma origem. Como
+roda na sua máquina, alcança também o que só a sua rede ou VPN enxerga. Ele
+escuta só em `127.0.0.1`, aceita só `http(s)` e recusa `Host`/`Origin` que não
+sejam locais. Marque *Passar pelo servidor local* (vem marcado quando disponível).
+
+Também dá para abrir direto o player com `?hls=url1,url2,url3,url4&proxy=1`.
 
 Para testar sem o encoder real, publique as 4 câmeras locais como HLS ao vivo:
 
 ```bash
 make hls-server              # terminal 1 (HLS_FORMAT=ts para MPEG-TS)
-make web-hls                 # terminal 2
+make web-hls                 # terminal 2: página de entrada; use o botão "Usar o HLS local"
 make check-hls HLS="http://127.0.0.1:8082/cam1/index.m3u8 http://127.0.0.1:8082/cam2/index.m3u8 http://127.0.0.1:8082/cam3/index.m3u8 http://127.0.0.1:8082/cam4/index.m3u8"
 ```
 
@@ -275,6 +292,9 @@ scripts/11_hls_server.sh    publica as 4 câmeras locais como HLS ao vivo (ffmpe
 web/index.html, app.js      página: Shaka, modos, layouts, painel
 web/mv-shaka.js             plugin mv:// do Shaka + reescrita do MPD
 web/hevc-merge.js           merge HEVC em JavaScript (SPS/PPS/slice header + fMP4)
+web/hls.html, hls-page.js   página para colar os 4 streams HLS, verificar e tocar
+web/hls-check.js            diagnóstico estrutural (usado pela página e pelo make check-hls)
+scripts/web_server.py       servidor da página + proxy local (/proxy) contra CORS
 web/hls.js                  parser de playlists HLS e pareamento dos segmentos entre câmeras
 web/hls-source.js           fonte HLS: MPD virtual com SegmentTimeline e segmentos mergeados
 web/ts-remux.js             MPEG-TS -> fMP4 (só HEVC), para HLS com segmentos .ts

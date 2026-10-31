@@ -57,7 +57,8 @@
       <label>CAM 2 <input type="url" name="hls2" placeholder="https://.../cam2/index.m3u8" spellcheck="false"></label>
       <label>CAM 3 <input type="url" name="hls3" placeholder="https://.../cam3/index.m3u8" spellcheck="false"></label>
       <label>CAM 4 <input type="url" name="hls4" placeholder="https://.../cam4/index.m3u8" spellcheck="false"></label>
-      <p class="note">Playlist de mídia ou master (usa a variante HEVC de maior banda), segmentos fMP4 ou MPEG-TS. O servidor precisa liberar CORS. Antes de tocar, confira com <code>make check-hls</code>.</p>
+      <label class="chk"><input type="checkbox" id="proxyChk"> <span>Passar pelo servidor local <small>(contorna CORS; só com <code>make web</code>)</small></span></label>
+      <p class="note">Mais cômodo: <a href="hls.html">página de entrada HLS</a>, que também verifica os streams. Playlist de mídia ou master (usa a variante HEVC de maior banda), segmentos fMP4 ou MPEG-TS. O servidor precisa liberar CORS. Antes de tocar, confira com <code>make check-hls</code>.</p>
     </div>
     <button type="submit" class="btn">Carregar</button>
   </form>
