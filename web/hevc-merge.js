@@ -431,7 +431,12 @@ function buildHvcC(header, vps, sps, pps) {
 export function parseCameraInit(initBytes) {
   const boxes = parseBoxes(initBytes);
   const entry = findPath(boxes, ['moov', 'trak', 'mdia', 'minf', 'stbl', 'stsd']).children[0];
-  const hvcC = parseHvcC(find(entry.children, 'hvcC').data);
+  const hvcCBox = find(entry.children, 'hvcC');
+  if (!hvcCBox) {
+    const kind = entry.type === 'avc1' || entry.type === 'avc3' ? 'H.264' : entry.type;
+    throw new Error(`o stream é ${kind}, não HEVC: tiles só existem em HEVC (recodifique para HEVC, como o scripts/02_encode.sh faz)`);
+  }
+  const hvcC = parseHvcC(hvcCBox.data);
   if (hvcC.lengthSize !== 4) throw new Error('lengthSizeMinusOne diferente de 3 não suportado');
   const sps = parseSps(hvcC.sps), pps = parsePps(hvcC.pps);
   return { boxes, hvcC, sps, pps, raw: initBytes };
@@ -517,7 +522,7 @@ export function createMerger(cameraInits) {
   return {
     width, height, cols, rows, tiles, init,
     codecTile: { width: sps.width, height: sps.height, ctb: sps.ctbSize },
-    mergeSegment: (segments) => mergeSegment(cams, tiles, addrBits, segments),
+    mergeSegment: (segments, opts) => mergeSegment(cams, tiles, addrBits, segments, opts),
   };
 }
 
@@ -569,12 +574,36 @@ function splitNals(sample) {
   return nals;
 }
 
-function mergeSegment(cams, tiles, addrBits, segments) {
+// Junta todos os fragmentos de um segmento num só (amostras com campos explícitos).
+// Usado quando as câmeras empacotam o mesmo tempo em números diferentes de fragmentos.
+function flattenFragments(bytes, moofs) {
+  const frags = moofs.map((m) => readFragment(bytes, m));
+  const f0 = frags[0];
+  const samples = [];
+  for (const fr of frags) {
+    fr.samples.forEach((s, i) => samples.push({
+      dur: s.dur ?? fr.tfhd.defDur,
+      bytes: s.bytes,
+      flags: s.flags ?? (i === 0 && fr.firstFlags !== undefined ? fr.firstFlags : fr.tfhd.defFlags),
+      cto: s.cto ?? 0,
+    }));
+  }
+  if (samples.some((s) => s.dur === undefined || s.flags === undefined)) throw new Error('amostras sem duração/flags: não consigo juntar os fragmentos');
+  return { ...f0, version: 1, flags: 0x1 | 0x100 | 0x200 | 0x400 | 0x800, firstFlags: undefined, samples };
+}
+
+// opts.ignoreTime: câmeras independentes têm origens de tempo diferentes (tfdt); a saída usa o
+// tempo da câmera 1 e os quadros são pareados por posição. A contagem de quadros ainda tem de bater.
+function mergeSegment(cams, tiles, addrBits, segments, opts = {}) {
   if (segments.length !== cams.length) throw new Error('número de segmentos diferente do número de câmeras');
   const parsed = segments.map((s) => ({ bytes: s, boxes: parseBoxes(s) }));
   const moofsPerCam = parsed.map((p) => p.boxes.filter((b) => b.type === 'moof'));
-  const nFrag = moofsPerCam[0].length;
-  if (moofsPerCam.some((m) => m.length !== nFrag)) throw new Error('câmeras com número diferente de fragmentos no segmento');
+  let nFrag = moofsPerCam[0].length;
+  let fragsPerCam = null;
+  if (moofsPerCam.some((m) => m.length !== nFrag)) {
+    fragsPerCam = parsed.map((p, k) => [flattenFragments(p.bytes, moofsPerCam[k])]);
+    nFrag = 1;
+  }
 
   const out = [];
   const styp = find(parsed[0].boxes, 'styp');
@@ -582,12 +611,16 @@ function mergeSegment(cams, tiles, addrBits, segments) {
   const { sps, pps } = cams[0];
 
   for (let f = 0; f < nFrag; f++) {
-    const frags = parsed.map((p, k) => readFragment(p.bytes, moofsPerCam[k][f]));
+    const frags = fragsPerCam ? fragsPerCam.map((l) => l[f]) : parsed.map((p, k) => readFragment(p.bytes, moofsPerCam[k][f]));
     const f0 = frags[0];
     for (let k = 1; k < frags.length; k++) {
-      if (frags[k].decodeTime !== f0.decodeTime || frags[k].samples.length !== f0.samples.length) {
-        throw new Error(`câmera ${k + 1} desalinhada (tfdt ${frags[k].decodeTime} vs ${f0.decodeTime}, ` +
-          `${frags[k].samples.length} vs ${f0.samples.length} amostras): IDR/GOP precisam estar alinhados`);
+      if (frags[k].samples.length !== f0.samples.length) {
+        throw new Error(`câmera ${k + 1} com ${frags[k].samples.length} quadros no segmento e a câmera 1 com ${f0.samples.length}: ` +
+          'taxa de quadros e tamanho do GOP/segmento precisam ser iguais nas câmeras');
+      }
+      if (!opts.ignoreTime && frags[k].decodeTime !== f0.decodeTime) {
+        throw new Error(`câmera ${k + 1} desalinhada no tempo (tfdt ${frags[k].decodeTime} vs ${f0.decodeTime}): ` +
+          'os relógios das câmeras diferem; sincronize os encoders ou use o modo de streams independentes');
       }
     }
 

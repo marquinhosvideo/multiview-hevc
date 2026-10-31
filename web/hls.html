@@ -11,14 +11,14 @@
 <header class="top">
   <div class="brand">
     <h1>Entrada HLS <span class="dim">· 4 streams, 1 decoder</span></h1>
-    <p class="sub">Cole as 4 playlists <code>.m3u8</code>, confira se dá para costurar e toque o multiview.</p>
+    <p class="sub">Cole as 4 playlists <code>.m3u8</code> (canais ao vivo diferentes), confira se dá para costurar e toque o multiview.</p>
   </div>
   <div class="pills"><a class="pill" href="index.html">player (DASH local)</a></div>
 </header>
 
 <main class="hls-main">
   <form id="form" class="card" autocomplete="off">
-    <h2>1 · Streams <span class="dim">(uma câmera por campo, na ordem do mosaico)</span></h2>
+    <h2>1 · Canais <span class="dim">(um por campo, na ordem do mosaico)</span></h2>
     <div class="fields" id="fields">
       <label><span>CAM 1</span><input name="u1" type="url" placeholder="https://servidor/cam1/index.m3u8" spellcheck="false" required></label>
       <label><span>CAM 2</span><input name="u2" type="url" placeholder="https://servidor/cam2/index.m3u8" spellcheck="false" required></label>
@@ -29,6 +29,7 @@
 
     <div class="opts">
       <label class="chk"><input type="checkbox" id="proxy"> <span>Passar pelo servidor local <small id="proxyNote">(contorna CORS e alcança o que só a sua rede/VPN enxerga)</small></span></label>
+      <label class="chk"><input type="checkbox" id="indep" checked> <span>Canais independentes <small>(canais diferentes, sem relógio em comum: cada tile mostra o segmento mais recente do seu canal)</small></span></label>
       <button type="button" class="btn ghost" id="fillLocal">Usar o HLS local (<code>make hls-server</code>)</button>
     </div>
 

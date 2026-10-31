@@ -166,7 +166,7 @@ playlists, **pareia os segmentos** das câmeras (por `EXT-X-PROGRAM-DATE-TIME`, 
 pelo número de sequência se não houver), faz o merge e entrega um MPD virtual com
 uma representação só.
 
-**Antes de tocar, diagnostique os seus streams.** HLS de um encoder comum
+**Antes de tocar, diagnostique os seus streams** (`--sync auto` para câmeras sincronizadas). HLS de um encoder comum
 costuma não ser mergeável (ver "O que aprendemos"), e o merge nele não dá erro:
 dá imagem sutilmente errada.
 
@@ -178,6 +178,17 @@ O diagnóstico faz o mesmo que o player, mostra container, perfil, tile, TMVP e
 relógio de cada câmera e, com o `ffmpeg`, **decodifica o resultado e compara cada
 tile, quadro a quadro, com a câmera decodificada sozinha**. Essa é a única forma
 de saber se os vetores de movimento do encoder respeitam as bordas do tile.
+
+**Canais diferentes (multiview de canais ao vivo).** Os 4 streams não precisam
+estar sincronizados: no modo padrão (*Canais independentes*) cada tile mostra o
+segmento mais recente do seu canal, sem relógio em comum, e o tempo de saída segue
+o canal 1. Isso **não** dispensa o resto do contrato: os 4 canais precisam ter o
+mesmo SPS/PPS, a mesma resolução codificada, a mesma taxa de quadros, o mesmo
+número de quadros por segmento (GOP fixo, sem GOP adaptativo/scenecut) e o encode
+restrito (sem TMVP, vetores dentro do quadro). Em geral isso exige uma rendição
+própria para o multiview, produzida com o mesmo template de encoder nos 4 canais.
+Para câmeras de um mesmo evento, com relógio comum, use `--sync auto` (CLI) ou
+desmarque *Canais independentes*.
 
 **Interface web para colar os 4 streams:**
 

@@ -30,6 +30,7 @@ function hlsFromUrl() {
 const ui = {
   source: hlsFromUrl() ? 'hls' : 'dash',
   hls: hlsFromUrl() || storedHls(),
+  sync: params.get('sync') === 'auto' ? 'auto' : 'independent', // canais diferentes: sem relógio em comum
   proxy: params.has('proxy') ? params.get('proxy') === '1' : storedProxy(),
   mode: params.get('mode') === 'compare' ? 'compare' : 'merge',
   layout: LAYOUTS.includes(params.get('layout')) ? params.get('layout') : storedLayout(),
@@ -87,6 +88,8 @@ const scheme = createMultiviewScheme(shaka, {
       }
     } else if (e.type === 'warning') {
       log(e.message, 'err');
+    } else if (e.type === 'info') {
+      log(e.message);
     } else if (e.type === 'error') {
       log(`erro no merge: ${e.message}`, 'err');
       banner(`Erro no merge: ${e.message}`);
@@ -145,7 +148,7 @@ async function start() {
     if (ui.mode === 'merge') {
       const video = $('#video');
       const uri = ui.source === 'hls'
-        ? `mv://manifest/hls?cams=${cams.join(',')}${hlsQuery()}`
+        ? `mv://manifest/hls?cams=${cams.join(',')}&sync=${ui.sync}${hlsQuery()}`
         : `mv://manifest/merge?cams=${cams.join(',')}&mpd=${encodeURIComponent(MPD)}`;
       log(`Multiview: 1 player Shaka, câmeras ${cams.join(', ')} (${ui.source === 'hls' ? 'HLS' : 'DASH'})`);
       const player = await newPlayer(video, uri, 'multiview');

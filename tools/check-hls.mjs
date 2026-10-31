@@ -1,6 +1,6 @@
 // Diagnóstico de 4 (ou 2) streams HLS: dá para fazer o merge de tiles com eles?
 //
-//   node tools/check-hls.mjs [--segments N] [--no-decode] URL_CAM1 URL_CAM2 URL_CAM3 URL_CAM4
+//   node tools/check-hls.mjs [--segments N] [--sync independent|auto] [--no-decode] URL_CAM1 URL_CAM2 URL_CAM3 URL_CAM4
 //   make check-hls HLS="URL1 URL2 URL3 URL4"
 //
 // Faz o que o player faz (lê as playlists, alinha, remuxa TS se for o caso, junta
@@ -18,6 +18,7 @@ const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(name); if (i < 0) return def; const v = args[i + 1]; args.splice(i, 2); return v; };
 const noDecode = args.includes('--no-decode'); if (noDecode) args.splice(args.indexOf('--no-decode'), 1);
 const nSeg = Number(opt('--segments', 3));
+const sync = opt('--sync', 'independent'); // independent (canais diferentes) | auto (câmeras sincronizadas)
 const urls = args;
 if (urls.length !== 2 && urls.length !== 4) {
   console.error('uso: node tools/check-hls.mjs [--segments N] [--no-decode] URL_CAM1 URL_CAM2 [URL_CAM3 URL_CAM4]');
@@ -28,7 +29,7 @@ const mark = { ok: '\x1b[32m✔\x1b[0m', warn: '\x1b[33m!\x1b[0m', bad: '\x1b[31
 const res = { bad: 0, warn: 0 };
 const say = (kind, msg) => { console.log(`${mark[kind]} ${msg}`); if (kind !== 'ok') res[kind]++; };
 
-const d = await diagnose(urls, { fetchBytes, segments: nSeg });
+const d = await diagnose(urls, { fetchBytes, segments: nSeg, sync });
 if (!d.ok && !d.canvas) {
   for (const c of d.checks) say(c.kind, c.msg);
   console.log('\nVeredito: com estes streams o merge NÃO funciona como estão.');
@@ -37,7 +38,7 @@ if (!d.ok && !d.canvas) {
 const { source: src, merged, cams } = d;
 const m = { grid: d.canvas.grid, info: d.info, width: d.canvas.width, height: d.canvas.height };
 
-console.log(`\nCanvas: ${m.width}x${m.height} (grade ${m.grid.cols}x${m.grid.rows}) · alinhamento por ${m.info.mode === 'pdt' ? 'EXT-X-PROGRAM-DATE-TIME' : 'número de sequência'} · ${m.info.slots} segmentos em comum · ${m.info.live ? 'ao vivo' : 'VOD'}\n`);
+console.log(`\nCanvas: ${m.width}x${m.height} (grade ${m.grid.cols}x${m.grid.rows}) · pareamento: ${({ pdt: 'EXT-X-PROGRAM-DATE-TIME', seq: 'número de sequência', independent: 'canais independentes (segmentos mais recentes)' })[m.info.mode]} · ${m.info.slots} segmentos em comum · ${m.info.live ? 'ao vivo' : 'VOD'}\n`);
 console.log('cam  container  perfil/nível        tile       CTU  TMVP  bits  codec');
 for (const c of cams) {
   console.log(`${String(c.index).padEnd(4)} ${c.container.padEnd(10)} ${`prof ${c.profile}, nível ${c.level.toFixed(1)}`.padEnd(19)} ${`${c.width}x${c.height}`.padEnd(10)} ${String(c.ctb).padEnd(4)} ${(c.tmvp ? 'LIGADO' : 'off').padEnd(5)} ${c.bits}    ${c.codec}`);

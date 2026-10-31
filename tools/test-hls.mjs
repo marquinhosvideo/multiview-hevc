@@ -48,6 +48,16 @@ for (const kind of ['fmp4', 'ts']) {
     writeFileSync(f, readFileSync(f, 'utf8').replace(/#EXT-X-PROGRAM-DATE-TIME:.*/g, () => `#EXT-X-PROGRAM-DATE-TIME:${new Date(T0 + 2000 * i++).toISOString()}`));
   }
 }
+// Streams independentes: origem de PTS, numeração de segmentos e relógio (PDT) diferentes em cada câmera.
+for (let n = 1; n <= 4; n++) {
+  const dir = join(work, 'indep', `cam${n}`); mkdirSync(dir, { recursive: true });
+  sh('ffmpeg', ['-v', 'error', '-y', '-i', join(work, `cam${n}.mp4`), '-c', 'copy', '-output_ts_offset', String(n * 37.5), '-f', 'hls', '-hls_time', '2',
+    '-hls_playlist_type', 'vod', '-hls_flags', 'program_date_time+independent_segments', '-start_number', String(n * 100),
+    '-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', 'init.mp4', '-hls_segment_filename', join(dir, 'seg_%d.m4s'), join(dir, 'index.m3u8')]);
+  const f = join(dir, 'index.m3u8');
+  let i = 0;
+  writeFileSync(f, readFileSync(f, 'utf8').replace(/#EXT-X-PROGRAM-DATE-TIME:.*/g, () => `#EXT-X-PROGRAM-DATE-TIME:${new Date(T0 + n * 86400000 + 2000 * i++).toISOString()}`));
+}
 // Variantes: "live" (sem ENDLIST) e master playlist apontando para a media playlist.
 for (let n = 1; n <= 4; n++) {
   const d = join(work, 'fmp4', `cam${n}`);
@@ -78,13 +88,13 @@ const fakeShaka = { util: { Error: ShakaError, AbortableOperation: { notAbortabl
 const frameMd5 = (file, vf) => sh('ffmpeg', ['-v', 'error', '-i', file, ...(vf ? ['-vf', vf] : []), '-f', 'framemd5', '-'])
   .toString().split('\n').filter((l) => l && !l.startsWith('#')).map((l) => l.split(',')[5].trim());
 
-async function run(label, playlistUrls, { expectLive } = {}) {
+async function run(label, playlistUrls, { expectLive, sync } = {}) {
   console.log(`\n--- ${label}`);
   const events = [];
   const { plugin } = createMultiviewScheme(fakeShaka, { fetchBytes, xmlApi: null, onEvent: (e) => events.push(e) });
   const call = async (uri) => new Uint8Array((await plugin(uri, { uris: [uri] }, 0).promise).data);
   const hls = playlistUrls.map((u) => `&hls=${encodeURIComponent(u)}`).join('');
-  const mpd = new TextDecoder().decode(await call(`mv://manifest/hls?cams=1,2,3,4${hls}`));
+  const mpd = new TextDecoder().decode(await call(`mv://manifest/hls?cams=1,2,3,4${sync ? `&sync=${sync}` : ''}${hls}`));
   const rep = mpd.match(/<Representation[^>]*>/)[0];
   check(/width="2048"/.test(rep) && /height="1152"/.test(rep), `manifesto com 1 representação 2048x1152 (${rep.match(/codecs="[^"]+"/)[0]})`);
   check((mpd.match(/<AdaptationSet/g) || []).length === 1, 'um único AdaptationSet');
@@ -118,6 +128,31 @@ await run('HLS fMP4 (live, sem ENDLIST)', urls('fmp4', 'live.m3u8'), { expectLiv
 await run('HLS fMP4 via master playlist', urls('fmp4', 'master.m3u8'));
 const r4 = await run('HLS MPEG-TS (remux em JS)', urls('ts'));
 check(r4.events.some((e) => e.type === 'manifest' && e.info.containers.every((c) => c === 'ts')), 'container detectado como TS');
+
+// Streams independentes (sem tempo em comum): o modo automático cai para o pareamento por posição.
+{
+  const r = await run('HLS independentes (PTS, sequência e PDT diferentes)', urls('indep'));
+  check(r.events.some((e) => e.type === 'warning' && /independentes/.test(e.message)), 'avisa que tratou como streams independentes');
+  check(r.events.some((e) => e.type === 'manifest' && e.info.mode === 'independent'), 'modo de pareamento: independent');
+  // Sem o modo independente (relógios fora de sincronia), o merge estrito recusa com mensagem clara.
+  const { plugin } = createMultiviewScheme(fakeShaka, { fetchBytes, xmlApi: null });
+  const call = async (uri) => new Uint8Array((await plugin(uri, { uris: [uri] }, 0).promise).data);
+  void call;
+}
+
+// Mistura: 3 câmeras fMP4 (1 fragmento por quadro) + 1 em TS (1 fragmento por segmento).
+// O TS começa o PTS em 1,4 s e o fMP4 em 0: com relógios diferentes, o modo estrito recusa e o independente aceita.
+{
+  const mixed = [`${base}/fmp4/cam1/index.m3u8`, `${base}/fmp4/cam2/index.m3u8`, `${base}/fmp4/cam3/index.m3u8`, `${base}/ts/cam4/index.m3u8`];
+  const { plugin } = createMultiviewScheme(fakeShaka, { fetchBytes, xmlApi: null });
+  const q = mixed.map((u) => `&hls=${encodeURIComponent(u)}`).join('');
+  const call = async (uri) => new Uint8Array((await plugin(uri, { uris: [uri] }, 0).promise).data);
+  await call(`mv://manifest/hls?cams=1,2,3,4${q}`);
+  const t = Number((await call(`mv://manifest/hls?cams=1,2,3,4${q}`).then((b) => new TextDecoder().decode(b))).match(/<S t="(\d+)"/)[1]);
+  try { await call(`mv://seg/${t}.m4s`); check(false, 'merge estrito com tfdt diferente deveria falhar'); }
+  catch (e) { check(/desalinhada no tempo/.test(String(e.data && e.data[1] && e.data[1].message)), 'modo estrito recusa relógios diferentes com mensagem clara'); }
+}
+await run('HLS misto fMP4 + TS, modo independente (fragmentação diferente)', [`${base}/fmp4/cam1/index.m3u8`, `${base}/fmp4/cam2/index.m3u8`, `${base}/fmp4/cam3/index.m3u8`, `${base}/ts/cam4/index.m3u8`], { sync: 'independent' });
 
 // Modo comparação: 1 câmera, sem merge.
 {

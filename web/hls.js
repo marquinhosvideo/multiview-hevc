@@ -95,8 +95,27 @@ export function parseMedia(text, baseUrl) {
 // Devolve { mode, slots: [{ id, uris:[por câmera], dur, pdt }], skew }.
 //   id   = número de sequência da câmera 1 (estável entre atualizações da playlist)
 //   skew = maior diferença de PDT (ms) entre câmeras num mesmo slot (diagnóstico)
-export function alignSlots(playlists) {
+//
+// opts.offsets (modo "independent"): pareia a câmera k com a câmera 1 por
+// seq_k = seq_1 + offsets[k], ignorando relógio e PDT. Serve a streams que não
+// compartilham tempo nenhum (cada um com sua origem); o offset é fixado quando a
+// sessão começa, de modo que o pareamento fique estável nas atualizações.
+export function alignSlots(playlists, opts = {}) {
   const ref = playlists[0];
+  if (opts.offsets) {
+    const slots = [];
+    for (const s of ref.segments) {
+      const uris = [s.uri];
+      let ok = true;
+      for (const [k, p] of playlists.slice(1).entries()) {
+        const m = p.segments.find((c) => c.seq === s.seq + opts.offsets[k + 1]);
+        if (!m) { ok = false; break; }
+        uris.push(m.uri);
+      }
+      if (ok) slots.push({ id: s.seq, uris, dur: s.dur, pdt: null });
+    }
+    return { mode: 'independent', slots, skew: 0 };
+  }
   const allPdt = playlists.every((p) => p.segments.every((s) => s.pdt !== null));
   const mode = allPdt ? 'pdt' : 'seq';
   const slots = [];
@@ -119,4 +138,13 @@ export function alignSlots(playlists) {
     if (ok) slots.push({ id: s.seq, uris, dur: s.dur, pdt: s.pdt });
   }
   return { mode, slots, skew };
+}
+
+// Offsets de sequência para alinhar playlists independentes pelo segmento mais
+// recente (ao vivo) ou pelo primeiro (VOD): offsets[k] = âncora_k - âncora_1.
+export function independentOffsets(playlists) {
+  const live = !playlists[0].endList;
+  const anchor = (p) => (live ? p.segments[p.segments.length - 1].seq : p.segments[0].seq);
+  const a0 = anchor(playlists[0]);
+  return playlists.map((p) => anchor(p) - a0);
 }

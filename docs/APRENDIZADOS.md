@@ -121,3 +121,13 @@ mesma linha do Homebrew 26.07) tudo funcionou. Use a versão do Homebrew.
   mostra se o encoder respeita as bordas: com TMVP ligado, as câmeras do
   topo/esquerda divergiram desde o 2º quadro e a do canto inferior direito
   passou 100%, o mesmo padrão do item 2.
+- **Canais independentes (multiview de TV).** Sem relógio comum, o pareamento é por
+  posição: o segmento mais recente de cada canal (VOD: o primeiro), com offsets de
+  sequência fixados na primeira leitura. O merge ignora o `tfdt` de cada canal e usa
+  o tempo do canal 1. O que **não** pode diferir: contagem de quadros por segmento
+  (taxa de quadros e GOP), SPS/PPS e resolução. Em canais reais, a estrutura de GOP
+  também tem de ser a mesma quadro a quadro (tipo de slice, POC, RPS), o que GOP
+  adaptativo ou scenecut quebra. Isso só se confirma decodificando
+  (`make check-hls`). Limite conhecido: canais com taxas de segmento ligeiramente
+  diferentes (29,97 vs 30) deslizam um contra o outro ao longo de horas; a pareação
+  por contagem não se reancora sozinha.

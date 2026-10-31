@@ -47,7 +47,7 @@ $('#fillLocal').addEventListener('click', () => {
 
 // ---- diagnóstico
 const playBtn = $('#play'), checkBtn = $('#check');
-let verified = null;
+let verified = null, syncForPlay = 'auto';
 function invalidate() { verified = null; playBtn.disabled = true; }
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const ICON = { ok: '✔', warn: '!', bad: '✘' };
@@ -72,13 +72,13 @@ $('#form').addEventListener('submit', async (e) => {
   checkBtn.disabled = true; invalidate();
 
   let d;
-  try { d = await diagnose(urls, { fetchBytes: fetcher(), segments: 3 }); }
+  try { d = await diagnose(urls, { fetchBytes: fetcher(), segments: 3, sync: $('#indep').checked ? 'independent' : 'auto' }); }
   catch (err) { d = { ok: false, checks: [{ kind: 'bad', msg: String(err && err.message || err) }] }; }
   checkBtn.disabled = false;
   $('#status').className = 'status';
 
   if (d.canvas) {
-    $('#status').textContent = `Canvas ${d.canvas.width}×${d.canvas.height} (grade ${d.canvas.grid.cols}×${d.canvas.grid.rows}) · pareamento por ${d.info.mode === 'pdt' ? 'EXT-X-PROGRAM-DATE-TIME' : 'número de sequência'} · ${d.info.slots} segmentos em comum · ${d.info.live ? 'ao vivo' : 'VOD'}`;
+    $('#status').textContent = `Canvas ${d.canvas.width}×${d.canvas.height} (grade ${d.canvas.grid.cols}×${d.canvas.grid.rows}) · pareamento: ${({ pdt: 'EXT-X-PROGRAM-DATE-TIME', seq: 'número de sequência', independent: 'canais independentes' })[d.info.mode]} · ${d.info.slots} segmentos em comum · ${d.info.live ? 'ao vivo' : 'VOD'}`;
     $('#camTable').innerHTML = `<tr><th>cam</th><th>container</th><th>perfil / nível</th><th>tile</th><th>CTU</th><th>TMVP</th><th>codec</th></tr>` +
       d.cams.map((c) => `<tr><td>${c.index}</td><td>${c.container}</td><td>${c.profile} / ${c.level.toFixed(1)}</td><td>${c.width}×${c.height}</td><td>${c.ctb}</td>` +
         `<td class="${c.tmvp ? 'warn' : 'good'}">${c.tmvp ? 'ligado' : 'desligado'}</td><td>${esc(c.codec)}</td></tr>`).join('');
@@ -88,14 +88,17 @@ $('#form').addEventListener('submit', async (e) => {
   const v = $('#verdict');
   if (!d.canvas || d.checks.some((c) => c.kind === 'bad')) {
     v.className = 'verdict bad';
-    v.innerHTML = '<strong>Não dá para costurar estes streams como estão.</strong> Corrija os itens ✘ no encoder ou recodifique antes de publicar (<code>scripts/02_encode.sh</code> mostra o perfil).';
+    v.innerHTML = (!$('#indep').checked ? '' : '') + '<strong>Não dá para costurar estes streams como estão.</strong> Corrija os itens ✘ no encoder ou recodifique antes de publicar (<code>scripts/02_encode.sh</code> mostra o perfil).';
     return;
   }
   verified = { urls, proxy: proxyBox.checked };
+  syncForPlay = d.info.mode === 'independent' ? 'independent' : 'auto';
   playBtn.disabled = false;
   const tmvp = d.cams.some((c) => c.tmvp);
+  const indep = d.info.mode === 'independent';
   v.className = `verdict ${tmvp ? 'warn' : 'good'}`;
   v.innerHTML = `<strong>Estruturalmente mergeável.</strong> ` +
+    (indep ? 'Canais independentes: cada tile mostra o segmento mais recente do seu canal, e o tempo de saída segue o canal 1. ' : '') +
     (tmvp ? 'Mas há TMVP ligado: o merge pode sair com imagem errada junto às bordas dos tiles, sem acusar erro. ' : 'O SPS não tem TMVP. ') +
     'Esta página não decodifica o vídeo, então não prova que os vetores de movimento respeitam as bordas. Duas formas de confirmar: ' +
     '<strong>toque o multiview</strong> e procure borrões ou "fantasmas" nas emendas (use o layout <em>Frame decodificado</em>), ou rode a prova bit a bit: <br>' +
@@ -104,6 +107,6 @@ $('#form').addEventListener('submit', async (e) => {
 
 playBtn.addEventListener('click', () => {
   const urls = inputs.map((i) => i.value.trim());
-  const q = new URLSearchParams({ hls: urls.join(','), proxy: proxyBox.checked ? '1' : '0' });
+  const q = new URLSearchParams({ hls: urls.join(','), proxy: proxyBox.checked ? '1' : '0', sync: $('#indep').checked ? 'independent' : syncForPlay });
   location.href = `index.html?${q}`;
 });

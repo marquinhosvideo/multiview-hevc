@@ -139,7 +139,7 @@ export function createMultiviewScheme(shakaNs, opts) {
           return urls[n - 1];
         });
         state.hls = state.hls || createHlsSource({ fetchBytes, presentationDelay, onEvent });
-        const m = await state.hls.refresh(chosen);
+        const m = await state.hls.refresh(chosen, { sync: u.searchParams.get('sync') || 'auto' });
         state.cameras = m.cameras.map((c, i) => ({ ...c, index: cams[i] }));
         state.merger = null; state.source = 'hls';
         onEvent({ type: 'manifest', cameras: state.cameras, width: m.width, height: m.height, grid: m.grid, source: 'hls', info: m.info });

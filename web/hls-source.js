@@ -8,7 +8,7 @@
 // URLs mv://seg/$Time$.m4s.
 
 import { createMerger, gridFor, initTimescale, firstDecodeTime, initCodecString, parseCameraInit } from './hevc-merge.js';
-import { isMasterPlaylist, parseMaster, pickVariant, parseMedia, alignSlots } from './hls.js';
+import { isMasterPlaylist, parseMaster, pickVariant, parseMedia, alignSlots, independentOffsets } from './hls.js';
 import { looksLikeTs, tsInit, tsToFragment } from './ts-remux.js';
 
 const td = new TextDecoder();
@@ -70,19 +70,42 @@ function makeCamera(index, url, io) {
 export function createHlsSource(opts) {
   const { fetchBytes, presentationDelay = 6, onEvent = () => {} } = opts;
   const io = { fetchBytes, cached: makeCache(fetchBytes) };
-  const st = { cams: [], merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map(), info: null };
+  const st = { sync: null, offsets: null, cams: [], merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map(), info: null };
 
   // Relê as playlists e devolve o MPD virtual do canvas (ou de uma câmera só).
-  async function refresh(urls, { single = false } = {}) {
+  async function refresh(urls, { single = false, sync = 'auto' } = {}) {
     if (st.cams.length !== urls.length || st.cams.some((c, i) => c.url !== urls[i])) {
-      Object.assign(st, { cams: urls.map((u, i) => makeCamera(i + 1, u, io)), merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map() });
+      Object.assign(st, { sync: null, offsets: null, cams: urls.map((u, i) => makeCamera(i + 1, u, io)), merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map() });
     }
     const lists = await Promise.all(st.cams.map((c) => c.load()));
     for (const [i, l] of lists.entries()) {
       if (l.hasDiscontinuity && !l.endList) onEvent({ type: 'warning', message: `CAM ${i + 1}: playlist com EXT-X-DISCONTINUITY; o alinhamento pode falhar na descontinuidade` });
     }
-    const aligned = single ? { mode: 'seq', slots: lists[0].segments.map((s) => ({ id: s.seq, uris: [s.uri], dur: s.dur, pdt: s.pdt })), skew: 0 } : alignSlots(lists);
-    if (!aligned.slots.length) throw new Error('nenhum segmento em comum entre as câmeras (playlists sem sobreposição no tempo): confira os relógios e o EXT-X-PROGRAM-DATE-TIME');
+    let aligned;
+    if (single) {
+      aligned = { mode: 'seq', slots: lists[0].segments.map((s) => ({ id: s.seq, uris: [s.uri], dur: s.dur, pdt: s.pdt })), skew: 0 };
+    } else {
+      // Streams com relógio comum: PDT ou sequência. Sem tempo em comum (fontes independentes),
+      // cai para o pareamento por posição, com offsets fixados na primeira leitura.
+      if (st.offsets) aligned = alignSlots(lists, { offsets: st.offsets });
+      else if (sync === 'independent') aligned = null;
+      else aligned = alignSlots(lists);
+      if (!aligned || !aligned.slots.length) {
+        if (!st.offsets) {
+          st.offsets = independentOffsets(lists);
+          if (sync === 'independent') onEvent({ type: 'info', message: 'canais independentes: cada tile mostra o segmento mais recente do seu canal, sem relógio em comum' });
+          else onEvent({ type: 'warning', message: 'os streams não têm tempo em comum (PDT/sequência): tratei como canais independentes e pareei os segmentos mais recentes; cada tile mostra um instante diferente' });
+        }
+        aligned = alignSlots(lists, { offsets: st.offsets });
+      }
+      if (aligned.mode === 'independent') {
+        const durs = lists.map((l) => l.segments[l.segments.length - 1].dur);
+        if (Math.max(...durs) - Math.min(...durs) > 0.05 * Math.max(...durs)) {
+          throw new Error(`duração dos segmentos diferente entre as câmeras (${durs.map((d) => d.toFixed(2) + 's').join(' / ')}): os GOPs precisam ter o mesmo tamanho para costurar`);
+        }
+      }
+    }
+    if (!aligned.slots.length) throw new Error('nenhum segmento em comum entre as câmeras: as playlists não se sobrepõem');
     const firstSlot = aligned.slots[0];
     await Promise.all(st.cams.map((c, i) => c.ensureInit(firstSlot.uris[i])));
 
@@ -169,7 +192,7 @@ export function createHlsSource(opts) {
     async mergedSegment(t) {
       const slot = slotFor(t);
       const segs = await Promise.all(st.cams.map((c, i) => c.segment(slot.uris[i])));
-      return { slot, segs, out: st.merger.mergeSegment(segs) };
+      return { slot, segs, out: st.merger.mergeSegment(segs, { ignoreTime: st.offsets !== null }) };
     },
     async camSegment(t) {
       const slot = slotFor(t);
