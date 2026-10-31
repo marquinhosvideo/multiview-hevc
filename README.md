@@ -288,6 +288,10 @@ Detalhes e evidências em [`docs/APRENDIZADOS.md`](docs/APRENDIZADOS.md).
 
 ## Limitações (de propósito)
 
+- Canais com WPP e altura não múltipla do CTU (ex.: 1280×720 com CTU 64): o merge recusa; a opção
+  experimental *Tiles lado a lado com WPP* (`wpprow=1`, `--wpp-row`) copia os entry points e põe os
+  tiles numa fileira. Pelo que li da especificação ela é válida, mas o FFmpeg não a decodifica e não foi
+  testada em decoders de hardware; a correção segura é desligar o WPP no encoder (ou usar CTU 16).
 - Canais com WPP: o merge os aceita empilhando os tiles em 1 coluna (ver `docs/APRENDIZADOS.md`);
   decoders de hardware podem recusar tiles + WPP. O contrato original (`--no-wpp`) continua o mais seguro.
 - Há dois players: o GPAC (prova técnica, conta decoders) e o Shaka na página

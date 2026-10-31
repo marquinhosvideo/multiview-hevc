@@ -158,3 +158,9 @@ mesma linha do Homebrew 26.07) tudo funcionou. Use a versão do Homebrew.
   7680x1080 passaram bit a bit no FFmpeg (fontes só intra). O `general_level_idc` do canvas (SPS,
   VPS e hvcC) é elevado ao necessário para o tamanho; a taxa de amostras (MaxLumaSr, depende
   do fps) não é verificada. Decoders de hardware podem recusar o que o FFmpeg aceita.
+- **WPP + altura livre (experimental).** Canal com WPP e altura não múltipla do CTU (1280x720 com CTU 64)
+  não pode empilhar. A opção `wpprow` põe os tiles numa fileira e copia os entry points; validada só no
+  cabeçalho (PPS com tiles + WPP, slice headers e entry points idênticos aos da câmera). O FFmpeg não
+  decodifica tiles lado a lado + WPP (sincroniza as linhas pela largura do quadro); a minha leitura é que a
+  especificação sincroniza por tile, mas não confirmei no texto da norma nem em hardware. Saídas seguras:
+  `--no-wpp` no encoder, ou CTU 16 (720 = 45 x 16), que permite empilhar.

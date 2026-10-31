@@ -108,6 +108,21 @@ const fakeShaka = { util: { Error: ShakaError, AbortableOperation: { notAbortabl
 const frameMd5 = (file, vf) => sh('ffmpeg', ['-v', 'error', '-i', file, ...(vf ? ['-vf', vf] : []), '-f', 'framemd5', '-'])
   .toString().split('\n').filter((l) => l && !l.startsWith('#')).map((l) => l.split(',')[5].trim());
 
+// Elementos de sintaxe de cada slice header, via trace_headers do FFmpeg (ignora os que mudam de propósito no merge).
+const traceSlices = (file, keepEntry = false) => {
+  const txt = spawnSync('ffmpeg', ['-hide_banner', '-v', 'debug', '-i', file, '-c', 'copy', '-bsf:v', 'trace_headers', '-f', 'null', '-'], { encoding: 'utf8', maxBuffer: 1 << 29 }).stderr;
+  const skip = keepEntry ? /^(first_slice_segment_in_pic_flag|slice_segment_address|alignment_bit|slice_pic_parameter_set_id)/
+    : /^(first_slice_segment_in_pic_flag|slice_segment_address|alignment_bit|slice_pic_parameter_set_id|num_entry_point_offsets)/;
+  const out = []; let cur = null;
+  for (const line of txt.split('\n')) {
+    if (/trace_headers[^\]]*\] Slice Segment Header/.test(line)) { cur = []; out.push(cur); continue; }
+    if (/trace_headers[^\]]*\] (?!\d)/.test(line)) { cur = null; continue; }
+    const m = cur && line.match(/trace_headers[^\]]*\]\s+\d+\s+(\w+)(?:\[[^\]]*\])*\s+[01]*\s*=\s*(-?\d+)/);
+    if (m && !skip.test(m[1])) cur.push(`${m[1]}=${m[2]}`);
+  }
+  return out;
+};
+
 async function run(label, playlistUrls, { expectLive, sync } = {}) {
   console.log(`\n--- ${label}`);
   const events = [];
@@ -251,14 +266,14 @@ for (const [label, extra, bipred] of [['P', 'bframes=0:weightp=1', false], ['B',
   const out = join(dir, 'merged.mp4'); writeFileSync(out, Buffer.concat(parts));
   // Compara os elementos de sintaxe de cada slice header (trace_headers do FFmpeg) entre a câmera
   // sozinha e o seu slice no merge. Pixels não servem aqui: com x265 os vetores podem cruzar a borda do tile.
-  const slicesOf = (file) => {
+  const slicesOf = (file, keepEntry = false) => {
     const txt = spawnSync('ffmpeg', ['-hide_banner', '-v', 'debug', '-i', file, '-c', 'copy', '-bsf:v', 'trace_headers', '-f', 'null', '-'], { encoding: 'utf8', maxBuffer: 1 << 29 }).stderr;
     const out = []; let cur = null;
     for (const line of txt.split('\n')) {
       if (/trace_headers[^\]]*\] Slice Segment Header/.test(line)) { cur = []; out.push(cur); continue; }
       if (/trace_headers[^\]]*\] (?!\d)/.test(line)) { cur = null; continue; }
       const m = cur && line.match(/trace_headers[^\]]*\]\s+\d+\s+(\w+)(?:\[[^\]]*\])*\s+[01]*\s*=\s*(-?\d+)/);
-      if (m && !/^(first_slice_segment_in_pic_flag|slice_segment_address|alignment_bit|slice_pic_parameter_set_id|num_entry_point_offsets)/.test(m[1])) cur.push(`${m[1]}=${m[2]}`);
+      if (m && !(keepEntry ? /^(first_slice_segment_in_pic_flag|slice_segment_address|alignment_bit|slice_pic_parameter_set_id)/ : /^(first_slice_segment_in_pic_flag|slice_segment_address|alignment_bit|slice_pic_parameter_set_id|num_entry_point_offsets)/).test(m[1])) cur.push(`${m[1]}=${m[2]}`);
     }
     return out;
   };
@@ -327,6 +342,30 @@ for (const [label, w2, h2, secs] of [['960x540', 960, 540, 4], ['1920x1080', 192
   const q = [1, 2, 3, 4].map((n) => `&hls=${encodeURIComponent(`${base}/wpp1080/cam${n}/index.m3u8`)}`).join('');
   try { await plugin(`mv://manifest/hls?cams=1,2,3,4&sync=independent${q}`, { uris: [] }, 0).promise; check(false, 'WPP + altura 360 deveria recusar'); }
   catch (e) { check(/WPP e altura 360/.test(String(e.data && e.data[1] && e.data[1].message)), 'WPP + altura que não é múltipla do CTU: recusa com mensagem clara'); }
+
+  // Com a opção experimental, os tiles ficam lado a lado e os entry points do WPP são copiados. O FFmpeg não
+  // decodifica essa combinação (limite dele), então a prova é a do cabeçalho: PPS com tiles + WPP e slice
+  // headers, entry points incluídos, iguais aos da câmera.
+  const evs = [];
+  const p2 = createMultiviewScheme(fakeShaka, { fetchBytes, xmlApi: null, onEvent: (e) => evs.push(e) }).plugin;
+  const call2 = async (uri) => new Uint8Array((await p2(uri, { uris: [uri] }, 0).promise).data);
+  const mp = new TextDecoder().decode(await call2(`mv://manifest/hls?cams=1,2,3,4&sync=independent&wpprow=1${q}`));
+  check(/width="2560"/.test(mp) && /height="360"/.test(mp), 'WPP experimental: 4 tiles lado a lado, canvas 2560x360');
+  const parts = [await call2('mv://seg/init.mp4')];
+  for (const t of [...mp.matchAll(/<S t="(\d+)"/g)].map((x) => Number(x[1]))) parts.push(await call2(`mv://seg/${t}.m4s`));
+  const out = join(dir, 'merged.mp4'); writeFileSync(out, Buffer.concat(parts));
+  const hdr = spawnSync('ffmpeg', ['-hide_banner', '-v', 'debug', '-i', out, '-c', 'copy', '-bsf:v', 'trace_headers', '-f', 'null', '-'], { encoding: 'utf8', maxBuffer: 1 << 29 }).stderr;
+  check(/tiles_enabled_flag\s+1 = 1/.test(hdr) && /entropy_coding_sync_enabled_flag\s+1 = 1/.test(hdr), 'WPP experimental: o PPS do canvas liga tiles e WPP');
+  const merged = traceSlices(out, true);
+  for (let n = 1; n <= 4; n++) {
+    const d = join(dir, `cam${n}`), segs = readdirSync(d).filter((f) => f.endsWith('.m4s')).sort((x, y) => Number(x.match(/\d+/)[0]) - Number(y.match(/\d+/)[0]));
+    const f = join(dir, `ref${n}.mp4`);
+    writeFileSync(f, Buffer.concat([readFileSync(join(d, 'init.mp4')), ...segs.map((x) => readFileSync(join(d, x)))]));
+    const ref = traceSlices(f, true), mine = merged.filter((_, i) => i % 4 === n - 1);
+    const same = ref.filter((sl, i) => mine[i] && sl.join('|') === mine[i].join('|')).length;
+    const withEntry = ref.filter((sl) => sl.some((e) => /^entry_point_offset_minus1/.test(e))).length;
+    check(ref.length === 60 && same === ref.length && withEntry > 0, `WPP experimental cam${n}: ${same}/${ref.length} slice headers idênticos, entry points incluídos (${withEntry} com offsets)`);
+  }
 }
 
 // Escolha de variante (master playlist / MPD): 4K não cabe no multiview.

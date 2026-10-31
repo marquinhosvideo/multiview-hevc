@@ -8,14 +8,14 @@ import { createHlsSource } from './hls-source.js';
 import { parseCameraInit, initCodecString } from './hevc-merge.js';
 
 // -> { ok, error?, canvas, info, cams, checks:[{kind:'ok'|'warn'|'bad', msg}], merged, source }
-export async function diagnose(urls, { fetchBytes, segments = 3, sync = 'auto', rendition = 'highest' } = {}) {
+export async function diagnose(urls, { fetchBytes, segments = 3, sync = 'auto', rendition = 'highest', wppRow = false } = {}) {
   const checks = [];
   const add = (kind, msg) => checks.push({ kind, msg });
   const events = [];
   const source = createHlsSource({ fetchBytes, onEvent: (e) => events.push(e) });
 
   let m;
-  try { m = await source.refresh(urls, { sync, rendition }); }
+  try { m = await source.refresh(urls, { sync, rendition, wppRow }); }
   catch (e) {
     add('bad', `não consegui montar o merge: ${e.message}`);
     return { ok: false, error: e.message, checks, source };
@@ -50,7 +50,9 @@ export async function diagnose(urls, { fetchBytes, segments = 3, sync = 'auto', 
     add('warn', `CAM ${cams.find((c) => c.tmvp).index}: TMVP ligado no SPS; a predição temporal de vetor pode cruzar a borda do tile (só a prova bit a bit confirma)`);
   } else add('ok', 'TMVP desligado em todas as câmeras');
 
-  if (source.state.merger && source.state.merger.wpp) {
+  if (source.state.merger && source.state.merger.wppRow) {
+    add('warn', 'EXPERIMENTAL: WPP com os tiles lado a lado (altura não múltipla do CTU). A especificação HEVC permite, mas o FFmpeg não decodifica e não consegui testar decoders de hardware; se a imagem vier corrompida ou não tocar, desligue o WPP no encoder');
+  } else if (source.state.merger && source.state.merger.wpp) {
     add('warn', 'WPP ligado nos canais: mantive o WPP e empilhei os tiles na vertical (1 coluna), porque tiles lado a lado + WPP quebra o decode. Tiles + WPP no mesmo stream é raro e alguns decoders de hardware recusam; se o vídeo não tocar, desligue o WPP no encoder');
   }
   const times = [...source.state.slotsByTime.keys()].slice(-segments);

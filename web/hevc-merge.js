@@ -521,7 +521,7 @@ function patchVpsLevel(nal, level) {
 }
 
 // Cria o contexto do merge a partir dos inits das câmeras (na ordem dos tiles).
-export function createMerger(cameraInits) {
+export function createMerger(cameraInits, opts = {}) {
   const cams = cameraInits.map(parseCameraInit);
   const c0 = cams[0];
   for (let i = 1; i < cams.length; i++) {
@@ -541,9 +541,14 @@ export function createMerger(cameraInits) {
   // Os layouts da página só recortam o frame, então a disposição dos tiles não aparece para quem assiste.
   let cols, rows;
   if (n < 2 || n > 4) throw new Error(`Multiview de ${n} canais não suportado (use 2 a 4)`);
+  let wppRow = false;
   if (wpp) {
-    if (!okH) throw new Error(`Canal com WPP e altura ${sps.height} não múltipla do CTU (${ctb}): com WPP os tiles têm de ficar empilhados, e a altura precisa ser múltipla do CTU; desligue o WPP no encoder`);
-    cols = 1; rows = n;
+    if (okH) { cols = 1; rows = n; }
+    else if (opts.allowWppRow && okW) { cols = n; rows = 1; wppRow = true; } // experimental: ver README
+    else {
+      throw new Error(`Canal com WPP e altura ${sps.height} não múltipla do CTU (${ctb}): com WPP os tiles têm de ficar empilhados, e a altura precisa ser múltipla do CTU. ` +
+        'Opções: desligue o WPP no encoder (o mais seguro) ou habilite "tiles lado a lado com WPP (experimental)", que a especificação HEVC permite mas o FFmpeg não decodifica');
+    }
   } else if (okW && okH) ({ cols, rows } = n === 3 ? { cols: 3, rows: 1 } : gridFor(n));
   else if (okW) { cols = n; rows = 1; }
   else if (okH) { cols = 1; rows = n; }
@@ -588,7 +593,7 @@ export function createMerger(cameraInits) {
   return {
     width, height, cols, rows, tiles, init, level,
     codecTile: { width: sps.width, height: sps.height, ctb: sps.ctbSize },
-    wpp: c0.pps.entropyCodingSync,
+    wpp: c0.pps.entropyCodingSync, wppRow,
     mergeSegment: (segments, opts) => mergeSegment(cams, tiles, addrBits, segments, opts),
   };
 }

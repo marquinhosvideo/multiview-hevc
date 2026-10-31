@@ -77,10 +77,11 @@ function makeCamera(index, url, io) {
 export function createHlsSource(opts) {
   const { fetchBytes, presentationDelay = 6, onEvent = () => {} } = opts;
   const io = { fetchBytes, cached: makeCache(fetchBytes), rendition: () => st.rendition };
-  const st = { rendition: 'highest', sync: null, offsets: null, cams: [], merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map(), info: null };
+  const st = { allowWppRow: false, rendition: 'highest', sync: null, offsets: null, cams: [], merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map(), info: null };
 
   // Relê as playlists e devolve o MPD virtual do canvas (ou de uma câmera só).
-  async function refresh(urls, { single = false, sync = 'auto', rendition = 'highest' } = {}) {
+  async function refresh(urls, { single = false, sync = 'auto', rendition = 'highest', wppRow = false } = {}) {
+    if (st.allowWppRow !== !!wppRow) { st.allowWppRow = !!wppRow; st.merger = null; }
     if (st.rendition !== String(rendition)) { st.rendition = String(rendition); st.cams = []; }
     if (st.cams.length !== urls.length || st.cams.some((c, i) => c.url !== urls[i])) {
       Object.assign(st, { sync: null, offsets: null, cams: urls.map((u, i) => makeCamera(i + 1, u, io)), merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map() });
@@ -127,7 +128,7 @@ export function createHlsSource(opts) {
     } else {
       const key = st.cams.map((c) => c.mediaUrl).join('|');
       if (!st.merger || st.mergerKey !== key) {
-        st.merger = createMerger(st.cams.map((c) => c.init));
+        st.merger = createMerger(st.cams.map((c) => c.init), { allowWppRow: st.allowWppRow });
         st.mergerKey = key;
         onEvent({ type: 'merger', width: st.merger.width, height: st.merger.height, tiles: st.merger.tiles });
       }

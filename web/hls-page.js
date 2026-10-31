@@ -19,6 +19,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* sem storage */ } },
 };
 proxyBox.checked = proxyOk && store.get('mv.proxy', true);
+$('#wpprow').addEventListener('change', invalidate);
 proxyBox.addEventListener('change', () => { store.set('mv.proxy', proxyBox.checked); invalidate(); });
 $('#rendition').value = store.get('mv.rendition', '540');
 $('#rendition').addEventListener('change', () => { store.set('mv.rendition', $('#rendition').value); invalidate(); });
@@ -74,7 +75,7 @@ $('#form').addEventListener('submit', async (e) => {
   checkBtn.disabled = true; invalidate();
 
   let d;
-  try { d = await diagnose(urls, { fetchBytes: fetcher(), segments: 3, sync: $('#indep').checked ? 'independent' : 'auto', rendition: $('#rendition').value }); }
+  try { d = await diagnose(urls, { fetchBytes: fetcher(), segments: 3, sync: $('#indep').checked ? 'independent' : 'auto', rendition: $('#rendition').value, wppRow: $('#wpprow').checked }); }
   catch (err) { d = { ok: false, checks: [{ kind: 'bad', msg: String(err && err.message || err) }] }; }
   checkBtn.disabled = false;
   $('#status').className = 'status';
@@ -110,5 +111,6 @@ $('#form').addEventListener('submit', async (e) => {
 playBtn.addEventListener('click', () => {
   const urls = inputs.map((i) => i.value.trim());
   const q = new URLSearchParams({ hls: urls.join(','), proxy: proxyBox.checked ? '1' : '0', sync: $('#indep').checked ? 'independent' : syncForPlay, rendition: $('#rendition').value });
+  if ($('#wpprow').checked) q.set('wpprow', '1');
   location.href = `index.html?${q}`;
 });
