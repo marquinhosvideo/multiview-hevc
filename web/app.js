@@ -6,9 +6,15 @@ const params = new URLSearchParams(location.search);
 const MPD = params.get('mpd') ||
   (location.port === '8080' ? `${location.origin}/live.mpd` : `http://${location.hostname}:8080/live.mpd`);
 
+const LAYOUTS = ['grid', 'side', 'bottom', 'pip', 'raw'];
+const LAYOUT_NAMES = { grid: 'Grade 2×2', side: '1 grande + 3 à direita', bottom: '1 grande + 3 embaixo', pip: 'Tela cheia + 3 miniaturas', raw: 'Frame decodificado' };
+function storedLayout() {
+  try { const v = localStorage.getItem('mv.layout'); return LAYOUTS.includes(v) ? v : 'grid'; } catch { return 'grid'; }
+}
+
 const ui = {
   mode: params.get('mode') === 'compare' ? 'compare' : 'merge',
-  layout: 'grid',
+  layout: LAYOUTS.includes(params.get('layout')) ? params.get('layout') : storedLayout(),
   cams: params.get('cams') || '1,2,3,4',
   focusCam: null,
 };
@@ -149,15 +155,38 @@ function fit(srcW, srcH, cell) {
   return { x: cell.x + (cell.w - w) / 2, y: cell.y + (cell.h - h) / 2, w, h };
 }
 
-function cellsFor(layout, n, W, H, focusIdx) {
+// Posição de cada câmera no canvas de saída, por layout. Só o render muda: o
+// decoder continua entregando o mesmo frame 2048x1152, e cada câmera é um
+// recorte (tile) dele.
+function cellsFor(layout, tiles, W, H, focusIdx) {
+  const n = tiles.length;
   const gap = Math.round(6 * devicePixelRatio);
-  if (layout === 'focus' && n > 1) {
+  const others = [...Array(n).keys()].filter((i) => i !== focusIdx);
+  const cells = new Array(n);
+  if (layout === 'side' && n > 1) {
     const mainW = Math.round(W * 0.74);
-    const cells = new Array(n);
     cells[focusIdx] = { x: 0, y: 0, w: mainW - gap, h: H };
-    const others = [...Array(n).keys()].filter((i) => i !== focusIdx);
     const h = (H - gap * (others.length - 1)) / others.length;
     others.forEach((i, k) => { cells[i] = { x: mainW, y: k * (h + gap), w: W - mainW, h }; });
+    return cells;
+  }
+  if (layout === 'bottom' && n > 1) {
+    // Miniaturas na proporção real da câmera, centralizadas numa faixa de 24% da altura.
+    const t = tiles[others[0]];
+    const stripH = Math.round(H * 0.24);
+    const w = Math.min(stripH * t.w / t.h, (W - gap * (others.length - 1)) / others.length), h = w * t.h / t.w;
+    const total = others.length * w + (others.length - 1) * gap;
+    cells[focusIdx] = { x: 0, y: 0, w: W, h: H - stripH - gap };
+    others.forEach((i, k) => { cells[i] = { x: (W - total) / 2 + k * (w + gap), y: H - h, w, h }; });
+    return cells;
+  }
+  if (layout === 'pip' && n > 1) {
+    cells[focusIdx] = { x: 0, y: 0, w: W, h: H };
+    const margin = Math.round(12 * devicePixelRatio);
+    const w = Math.min(W * 0.2, (W - margin * 2 - gap * (others.length - 1)) / others.length);
+    const t = tiles[others[0]], h = w * t.h / t.w;
+    const total = others.length * w + (others.length - 1) * gap;
+    others.forEach((i, k) => { cells[i] = { x: W - margin - total + k * (w + gap), y: H - margin - h, w, h }; });
     return cells;
   }
   const cols = n === 4 ? 2 : n, rows = n === 4 ? 2 : 1;
@@ -204,22 +233,29 @@ function draw() {
     return;
   }
   const focusIdx = Math.max(0, geometry.cams.indexOf(ui.focusCam ?? geometry.cams[0]));
-  const cells = cellsFor(ui.layout, n, W, H, focusIdx);
+  const cells = cellsFor(ui.layout, geometry.tiles, W, H, focusIdx);
+  const hasMain = ui.layout !== 'grid' && n > 1;
   lastCells = [];
-  geometry.tiles.forEach((t, i) => {
+  // A câmera principal é desenhada primeiro: no layout de miniaturas elas ficam por cima.
+  const order = [focusIdx, ...geometry.tiles.keys()].filter((i, k, a) => a.indexOf(i) === k);
+  for (const i of order) {
+    const t = geometry.tiles[i];
     const d = fit(t.w, t.h, cells[i]);
     ctx.drawImage(v, t.x, t.y, t.w, t.h, d.x, d.y, d.w, d.h);
-    label(`CAM ${geometry.cams[i]}`, d.x + 8 * dpr, d.y + 8 * dpr, ui.layout === 'focus' && i === focusIdx);
+    if (ui.layout === 'pip' && i !== focusIdx) {
+      ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 2 * dpr; ctx.strokeRect(d.x, d.y, d.w, d.h);
+    }
+    label(`CAM ${geometry.cams[i]}`, d.x + 8 * dpr, d.y + 8 * dpr, hasMain && i === focusIdx);
     lastCells.push({ ...d, cam: geometry.cams[i] });
-  });
+  }
 }
 requestAnimationFrame(draw);
 
 canvas.addEventListener('click', (ev) => {
-  if (ui.layout !== 'focus') return;
+  if (ui.layout === 'grid' || ui.layout === 'raw') return;
   const r = canvas.getBoundingClientRect(), dpr = devicePixelRatio;
   const x = (ev.clientX - r.left) * dpr, y = (ev.clientY - r.top) * dpr;
-  const hit = lastCells.find((c) => x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h);
+  const hit = lastCells.findLast((c) => x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h);
   if (hit && hit.cam !== ui.focusCam) { ui.focusCam = hit.cam; log(`destaque: CAM ${hit.cam} (só o render mudou; nada foi baixado ou decodificado de novo)`); }
 });
 
@@ -277,9 +313,26 @@ function setOn(group, attr, value) {
 for (const b of document.querySelectorAll('[data-mode]')) {
   b.addEventListener('click', () => { if (ui.mode === b.dataset.mode) return; ui.mode = b.dataset.mode; setOn('.controls .seg:first-child', 'mode', ui.mode); start(); });
 }
-for (const b of document.querySelectorAll('[data-layout]')) {
-  b.addEventListener('click', () => { ui.layout = b.dataset.layout; setOn('#layoutCtl', 'layout', ui.layout); });
+function setLayout(layout) {
+  ui.layout = layout;
+  for (const b of document.querySelectorAll('#layoutMenu [data-layout]')) {
+    const on = b.dataset.layout === layout;
+    b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on));
+  }
+  $('#layoutName').textContent = LAYOUT_NAMES[layout];
+  try { localStorage.setItem('mv.layout', layout); } catch { /* sem storage: só não lembra */ }
 }
+function toggleMenu(open) {
+  $('#layoutMenu').hidden = !open;
+  $('#layoutBtn').setAttribute('aria-expanded', String(open));
+}
+$('#layoutBtn').addEventListener('click', () => toggleMenu($('#layoutMenu').hidden));
+for (const b of document.querySelectorAll('#layoutMenu [data-layout]')) {
+  b.addEventListener('click', () => { setLayout(b.dataset.layout); toggleMenu(false); });
+}
+document.addEventListener('click', (e) => { if (!e.target.closest('#layoutCtl')) toggleMenu(false); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleMenu(false); });
+setLayout(ui.layout);
 $('#cams').value = ui.cams;
 $('#cams').addEventListener('change', (e) => { ui.cams = e.target.value; start(); });
 setOn('.controls .seg:first-child', 'mode', ui.mode);
@@ -288,4 +341,4 @@ log(`MPD do servidor: <code>${MPD}</code>`);
 start();
 
 // Para inspeção no console.
-window.mv = { get session() { return session; }, get geometry() { return geometry; }, scheme, merge };
+window.mv = { get session() { return session; }, get geometry() { return geometry; }, set geometry(g) { geometry = g; }, scheme, merge };

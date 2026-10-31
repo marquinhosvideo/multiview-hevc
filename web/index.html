@@ -22,10 +22,18 @@
     <button class="on" data-mode="merge" role="tab">Multiview · 1 decoder</button>
     <button data-mode="compare" role="tab">Comparação · 1 player por câmera</button>
   </div>
-  <div class="seg" id="layoutCtl" aria-label="Layout">
-    <button class="on" data-layout="grid">Grade</button>
-    <button data-layout="focus">Destaque</button>
-    <button data-layout="raw">Frame decodificado</button>
+  <div class="layoutpick" id="layoutCtl">
+    <button id="layoutBtn" class="btn" aria-haspopup="true" aria-expanded="false" aria-controls="layoutMenu">
+      Design de layout: <strong id="layoutName">Grade 2×2</strong> ▾
+    </button>
+    <div class="menu" id="layoutMenu" role="menu" hidden>
+      <button role="menuitemradio" data-layout="grid" class="on"><svg viewBox="0 0 48 27" aria-hidden="true"><rect x="1" y="1" width="22" height="12" rx="1.5" class="main"/><rect x="25" y="1" width="22" height="12" rx="1.5"/><rect x="1" y="14" width="22" height="12" rx="1.5"/><rect x="25" y="14" width="22" height="12" rx="1.5"/></svg><span>Grade 2×2<small>4 câmeras iguais</small></span></button>
+      <button role="menuitemradio" data-layout="side"><svg viewBox="0 0 48 27" aria-hidden="true"><rect x="1" y="1" width="34" height="25" rx="1.5" class="main"/><rect x="37" y="1" width="10" height="7.3" rx="1.5"/><rect x="37" y="9.8" width="10" height="7.3" rx="1.5"/><rect x="37" y="18.6" width="10" height="7.3" rx="1.5"/></svg><span>1 grande + 3 à direita<small>clique numa câmera para trocar</small></span></button>
+      <button role="menuitemradio" data-layout="bottom"><svg viewBox="0 0 48 27" aria-hidden="true"><rect x="1" y="1" width="46" height="19" rx="1.5" class="main"/><rect x="1" y="21.5" width="14" height="5" rx="1.5"/><rect x="17" y="21.5" width="14" height="5" rx="1.5"/><rect x="33" y="21.5" width="14" height="5" rx="1.5"/></svg><span>1 grande + 3 embaixo<small>faixa de miniaturas</small></span></button>
+      <button role="menuitemradio" data-layout="pip"><svg viewBox="0 0 48 27" aria-hidden="true"><rect x="1" y="1" width="46" height="25" rx="1.5" class="main"/><rect x="25" y="17" width="6.5" height="4.5" rx="1.5"/><rect x="32.5" y="17" width="6.5" height="4.5" rx="1.5"/><rect x="40" y="17" width="6.5" height="4.5" rx="1.5"/></svg><span>Tela cheia + 3 miniaturas<small>miniaturas sobre a imagem</small></span></button>
+      <hr>
+      <button role="menuitemradio" data-layout="raw" class="raw"><span>Frame decodificado<small>o canvas cru, com as bordas dos tiles</small></span></button>
+    </div>
   </div>
   <label class="sel">Câmeras
     <select id="cams">
@@ -45,7 +53,7 @@
       <video id="video" muted playsinline></video>
       <figcaption>o que o decoder entrega: <span id="decodedRes">—</span></figcaption>
     </figure>
-    <p class="hint" id="hint">No modo Destaque, clique numa câmera para trazê-la para o quadro principal.</p>
+    <p class="hint" id="hint">Nos layouts com uma câmera grande, clique em outra câmera para trazê-la ao quadro principal.</p>
   </section>
 
   <aside class="panel">

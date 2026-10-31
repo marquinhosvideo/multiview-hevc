@@ -137,9 +137,13 @@ devolve um erro HTTP recuperável e o Shaka tenta de novo, como faria com um 404
 - **Multiview · 1 decoder**: o mosaico é desenhado num `<canvas>` a partir do
   único `<video>`. O quadro pequeno no canto mostra o que o decoder realmente
   entrega: um frame 2048x1152.
-- **Layouts**: *Grade*, *Destaque* (clique numa câmera para trazê-la ao quadro
-  principal: só o render muda, nada é baixado ou decodificado de novo) e
-  *Frame decodificado* (o canvas cru, com as bordas dos tiles marcadas).
+- **Design de layout**: botão com 4 montagens dos 4 sinais, mais o frame cru.
+  *Grade 2×2*; *1 grande + 3 à direita*; *1 grande + 3 embaixo*; *Tela cheia + 3
+  miniaturas* (sobre a imagem). Nos layouts com uma câmera grande, clique em
+  outra câmera para trazê-la ao quadro principal: só o render muda, nada é
+  baixado ou decodificado de novo. A escolha fica salva no navegador, e
+  `?layout=side|bottom|pip|grid|raw` na URL força um layout. *Frame
+  decodificado* mostra o canvas cru, com as bordas dos tiles marcadas.
 - **Comparação · 1 player por câmera**: mesmo conteúdo, sem merge, com um
   player Shaka e um `<video>` por câmera. É o contraponto para comparar CPU,
   GPU e o `chrome://media-internals`.
@@ -203,8 +207,9 @@ Detalhes e evidências em [`docs/APRENDIZADOS.md`](docs/APRENDIZADOS.md).
   disso ele recusa com uma mensagem clara, em vez de gerar vídeo corrompido.
 - No player web, o layout é desenhado num `<canvas>` (2D). Em produção, WebGL ou
   o próprio compositor do player seriam mais eficientes.
-- Tiles de mesmo tamanho. Mosaico "1 grande + 3 pequenos" exige encodar cada
-  câmera em mais de uma resolução, o que é o próximo passo natural.
+- Tiles de mesmo tamanho. Os layouts "1 grande + 3 pequenos" são só de render:
+  a câmera grande é um tile 1024x576 ampliado. Para ela ter mais nitidez, seria
+  preciso encodar cada câmera em mais de uma resolução (próximo passo natural).
 - O servidor faz loop de arquivos já codificados (contribuição simulada). O
   Kvazaar em tempo real no Mac pode não sustentar 4 câmeras; não foi o foco.
 - Sem DRM, conforme o escopo.

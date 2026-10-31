@@ -77,7 +77,12 @@ console.log('merge :', text('#kvMerge'));
 console.log('inset :', text('#decodedRes'));
 console.log('banner:', w.document.querySelector('#banner').hidden ? '(oculto)' : text('#banner'));
 
-w.document.querySelector('[data-layout="focus"]').click();
+for (const l of ['side', 'bottom', 'pip', 'raw', 'grid']) {
+  w.document.querySelector('#layoutBtn').click();
+  w.document.querySelector(`#layoutMenu [data-layout="${l}"]`).click();
+  await sleep(150);
+  if (!text('#layoutName')) throw new Error(`layout ${l} sem nome`);
+}
 w.document.querySelector('[data-mode="compare"]').click();
 await sleep(3000);
 console.log('--- modo comparação');

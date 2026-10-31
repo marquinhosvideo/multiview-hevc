@@ -47,6 +47,31 @@ h1 .dim { color: var(--dim); font-weight: 500; }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button.on { background: #1c2230; color: var(--text); }
 .seg button:hover:not(.on) { color: var(--text); }
+.layoutpick { position: relative; }
+.btn {
+  background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+  padding: 7px 12px; font: inherit; cursor: pointer;
+}
+.btn:hover, .btn[aria-expanded="true"] { border-color: var(--accent); }
+.btn strong { color: var(--accent); font-weight: 600; }
+.menu {
+  position: absolute; z-index: 10; top: calc(100% + 6px); left: 0; width: 340px; padding: 6px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.45);
+}
+.menu button {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  background: transparent; color: var(--text); border: 1px solid transparent; border-radius: 8px;
+  padding: 8px; font: inherit; cursor: pointer;
+}
+.menu button:hover { background: #1a2030; }
+.menu button.on { border-color: var(--accent); background: #1c2230; }
+.menu button svg { width: 64px; flex: none; fill: #3a4256; background: #07080b; border-radius: 4px; }
+.menu button svg .main { fill: var(--accent); }
+.menu button span { display: flex; flex-direction: column; }
+.menu button small { color: var(--dim); font-size: 12px; }
+.menu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 0; }
+.menu button.raw { padding-left: 12px; }
 .sel { color: var(--dim); display: inline-flex; gap: 8px; align-items: center; }
 .sel select {
   background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font: inherit;
@@ -61,8 +86,8 @@ h1 .dim { color: var(--dim); font-weight: 500; }
   background: #07080b; border: 1px solid var(--line);
 }
 .inset {
-  position: absolute; right: 12px; bottom: 44px; width: 24%; min-width: 180px; margin: 0;
-  background: rgba(10,12,16,.8); border: 1px solid var(--line); border-radius: 8px; padding: 6px;
+  width: 260px; margin: 10px 0 0;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px;
 }
 .inset video { display: block; width: 100%; border-radius: 4px; background: #000; }
 .inset figcaption { font: 11px var(--mono); color: var(--dim); margin-top: 4px; }
