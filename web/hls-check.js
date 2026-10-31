@@ -8,14 +8,14 @@ import { createHlsSource } from './hls-source.js';
 import { parseCameraInit, initCodecString } from './hevc-merge.js';
 
 // -> { ok, error?, canvas, info, cams, checks:[{kind:'ok'|'warn'|'bad', msg}], merged, source }
-export async function diagnose(urls, { fetchBytes, segments = 3, sync = 'auto' } = {}) {
+export async function diagnose(urls, { fetchBytes, segments = 3, sync = 'auto', rendition = 'highest' } = {}) {
   const checks = [];
   const add = (kind, msg) => checks.push({ kind, msg });
   const events = [];
   const source = createHlsSource({ fetchBytes, onEvent: (e) => events.push(e) });
 
   let m;
-  try { m = await source.refresh(urls, { sync }); }
+  try { m = await source.refresh(urls, { sync, rendition }); }
   catch (e) {
     add('bad', `não consegui montar o merge: ${e.message}`);
     return { ok: false, error: e.message, checks, source };
@@ -36,8 +36,13 @@ export async function diagnose(urls, { fetchBytes, segments = 3, sync = 'auto' }
   else add('ok', `segmentos ${cams.map((c) => c.container.toUpperCase()).join('/')}: remuxados para fMP4 no cliente (sem recodificar)`);
   const sizes = [...new Set(cams.map((c) => `${c.width}x${c.height}`))];
   if (sizes.length > 1) add('bad', `os canais têm resolução codificada diferente (${sizes.join(', ')}): todos precisam ter o mesmo tamanho; escolha, em cada canal, uma variante da mesma resolução`);
-  else if (cams.every((c) => c.width % c.ctb === 0 && c.height % c.ctb === 0)) add('ok', `tile ${cams[0].width}x${cams[0].height}: múltiplo do CTU (${cams[0].ctb})`);
-  else add('bad', `tile ${cams[0].width}x${cams[0].height}: largura e altura precisam ser múltiplas do CTU (${cams[0].ctb}); peça ao encoder um CTU menor ou outra resolução`);
+  else {
+    const mg = source.state.merger;
+    add('ok', `tile ${cams[0].width}x${cams[0].height} (CTU ${cams[0].ctb}): ${mg.cols} coluna(s) x ${mg.rows} linha(s) de tiles, canvas ${mg.width}x${mg.height}, nível ${(mg.level / 30).toFixed(1)}`);
+    if (mg.width > 4096 || mg.height > 4096 || mg.width * mg.height > 8912896) {
+      add(mg.width * mg.height > 35651584 ? 'bad' : 'warn', `o canvas ${mg.width}x${mg.height} é grande: muitos decoders de hardware limitam o quadro a 4096 em cada lado e a ~8,9 Mpixels; use uma variante menor dos canais (opção de qualidade)`);
+    }
+  }
   if (m.info.mode === 'independent') { /* já informado acima */ }
   else if (m.info.mode === 'pdt') add(m.info.skew <= 40 ? 'ok' : 'warn', `desvio de relógio entre câmeras (PDT): até ${m.info.skew.toFixed(0)} ms`);
   else add('warn', 'sem EXT-X-PROGRAM-DATE-TIME: o pareamento depende de as câmeras numerarem os segmentos de forma idêntica');

@@ -36,11 +36,11 @@ function makeCamera(index, url, io) {
     let text = td.decode(await io.fetchBytes(cam.mediaUrl || cam.url));
     if (isMpd(text)) {
       cam.mediaUrl = cam.url;
-      cam.playlist = parseMpd(text, cam.url, { seqState: cam.dashSeq });
+      cam.playlist = parseMpd(text, cam.url, { seqState: cam.dashSeq, rendition: io.rendition() });
       return cam.playlist;
     }
     if (isMasterPlaylist(text)) {
-      cam.mediaUrl = pickVariant(parseMaster(text, cam.url)).uri;
+      cam.mediaUrl = pickVariant(parseMaster(text, cam.url), io.rendition()).uri;
       text = td.decode(await io.fetchBytes(cam.mediaUrl));
     } else cam.mediaUrl = cam.mediaUrl || cam.url;
     cam.playlist = parseMedia(text, cam.mediaUrl);
@@ -76,11 +76,12 @@ function makeCamera(index, url, io) {
 // opts: { fetchBytes, presentationDelay, onEvent }
 export function createHlsSource(opts) {
   const { fetchBytes, presentationDelay = 6, onEvent = () => {} } = opts;
-  const io = { fetchBytes, cached: makeCache(fetchBytes) };
-  const st = { sync: null, offsets: null, cams: [], merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map(), info: null };
+  const io = { fetchBytes, cached: makeCache(fetchBytes), rendition: () => st.rendition };
+  const st = { rendition: 'highest', sync: null, offsets: null, cams: [], merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map(), info: null };
 
   // Relê as playlists e devolve o MPD virtual do canvas (ou de uma câmera só).
-  async function refresh(urls, { single = false, sync = 'auto' } = {}) {
+  async function refresh(urls, { single = false, sync = 'auto', rendition = 'highest' } = {}) {
+    if (st.rendition !== String(rendition)) { st.rendition = String(rendition); st.cams = []; }
     if (st.cams.length !== urls.length || st.cams.some((c, i) => c.url !== urls[i])) {
       Object.assign(st, { sync: null, offsets: null, cams: urls.map((u, i) => makeCamera(i + 1, u, io)), merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map() });
     }

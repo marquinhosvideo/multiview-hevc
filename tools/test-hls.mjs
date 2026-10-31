@@ -16,6 +16,7 @@ import { join, extname } from 'node:path';
 import { createMultiviewScheme, fetchBytes } from '../web/mv-shaka.js';
 import { parseMedia, parseMaster, alignSlots } from '../web/hls.js';
 import { parseMpd } from '../web/dash.js';
+import { pickVariant } from '../web/hls.js';
 
 const W = 1024, H = 576, SECONDS = 6;
 const work = mkdtempSync(join(tmpdir(), 'mv-hls-'));
@@ -271,6 +272,75 @@ for (const [label, extra, bipred] of [['P', 'bframes=0:weightp=1', false], ['B',
     check(ref.length === 120 && same === ref.length, `weightp ${label} cam${n}: ${same}/${ref.length} slice headers idênticos (incl. pred_weight_table)`);
   }
   check(weighted > 0, `weightp ${label}: a fonte usa pesos de verdade (${weighted} slices com luma_weight_l0_flag=1)`);
+}
+
+// Resoluções de broadcast: a altura (540, 1080, 2160) não é múltipla do CTU, a largura é. Os tiles ficam
+// numa fileira só e o canvas sobe o nível. 960x540 também tem janela de corte (544 linhas codificadas).
+for (const [label, w2, h2, secs] of [['960x540', 960, 540, 4], ['1920x1080', 1920, 1080, 2]]) {
+  const dir = join(work, `row_${label}`); mkdirSync(dir, { recursive: true });
+  for (let n = 1; n <= 4; n++) {
+    sh('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', `${sources[n - 1]}${sources[n - 1].includes('=') ? ':' : '='}s=${w2}x${h2}:r=30`, '-t', String(secs),
+      '-vf', 'format=yuv420p,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv', '-c:v', 'libx265', '-preset', 'ultrafast',
+      '-x265-params', 'keyint=1:slices=1:no-wpp=1:ctu=64:min-cu-size=8:repeat-headers=1:log-level=error', '-tag:v', 'hvc1', join(dir, `c${n}.mp4`)]);
+    const d = join(dir, `cam${n}`); mkdirSync(d, { recursive: true });
+    sh('ffmpeg', ['-v', 'error', '-y', '-i', join(dir, `c${n}.mp4`), '-c', 'copy', '-f', 'hls', '-hls_time', '2', '-hls_playlist_type', 'vod',
+      '-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', 'init.mp4', '-hls_segment_filename', join(d, 'seg_%d.m4s'), join(d, 'index.m3u8')]);
+  }
+  const events = [];
+  const { plugin } = createMultiviewScheme(fakeShaka, { fetchBytes, xmlApi: null, onEvent: (e) => events.push(e) });
+  const call = async (uri) => new Uint8Array((await plugin(uri, { uris: [uri] }, 0).promise).data);
+  const q = [1, 2, 3, 4].map((n) => `&hls=${encodeURIComponent(`${base}/row_${label}/cam${n}/index.m3u8`)}`).join('');
+  const m = new TextDecoder().decode(await call(`mv://manifest/hls?cams=1,2,3,4&sync=independent${q}`));
+  const rep = m.match(/<Representation[^>]*>/)[0];
+  const cw = Number(rep.match(/ width="(\d+)"/)[1]), ch = Number(rep.match(/ height="(\d+)"/)[1]);
+  const tiles = events.find((e) => e.type === 'merger').tiles;
+  check(tiles.length === 4 && cw === w2 * 4 && new Set(tiles.map((t) => t.y)).size === 1, `${label}: CTU 64, altura não múltipla: 4 tiles numa fileira, canvas ${cw}x${ch}`);
+  const parts = [await call('mv://seg/init.mp4')];
+  for (const t of [...m.matchAll(/<S t="(\d+)"/g)].map((x) => Number(x[1]))) parts.push(await call(`mv://seg/${t}.m4s`));
+  const out = join(dir, 'merged.mp4'); writeFileSync(out, Buffer.concat(parts));
+  const tile = tiles[1];
+  check(tile.vis.w === w2 && tile.vis.h === h2, `${label}: área visível do tile ${tile.vis.w}x${tile.vis.h} (janela de corte descartada no canvas)`);
+  const hv = Buffer.from(parts[0]).indexOf('hvcC');
+  const lvl = parts[0][hv + 4 + 12];
+  check(lvl >= (cw * ch > 2228224 ? 150 : 120), `${label}: nível do canvas elevado para ${(lvl / 30).toFixed(1)} (${cw * ch} pixels)`);
+  for (let n = 1; n <= 4; n++) {
+    const d = join(dir, `cam${n}`), segs = readdirSync(d).filter((f) => f.endsWith('.m4s')).sort((x, y) => Number(x.match(/\d+/)[0]) - Number(y.match(/\d+/)[0]));
+    const f = join(dir, `ref${n}.mp4`);
+    writeFileSync(f, Buffer.concat([readFileSync(join(d, 'init.mp4')), ...segs.map((x) => readFileSync(join(d, x)))]));
+    const t = tiles[n - 1], ref = frameMd5(f), got = frameMd5(out, `crop=${w2}:${h2}:${t.x + t.vis.x}:${t.y + t.vis.y}`);
+    const same = ref.filter((h, i) => h === got[i]).length;
+    check(ref.length === secs * 30 && same === ref.length, `${label} cam${n}: ${same}/${ref.length} quadros idênticos à câmera isolada`);
+  }
+}
+
+// WPP com altura que não é múltipla do CTU: recusa com mensagem clara (tiles com WPP só empilham).
+{
+  const dir = join(work, 'wpp1080'); mkdirSync(dir, { recursive: true });
+  for (let n = 1; n <= 4; n++) {
+    sh('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', `smptebars=s=640x360:r=30`, '-t', '2', '-vf', 'format=yuv420p', '-c:v', 'libx265', '-preset', 'ultrafast',
+      '-x265-params', 'keyint=1:slices=1:wpp=1:ctu=64:min-cu-size=8:repeat-headers=1:log-level=error', '-tag:v', 'hvc1', join(dir, `c${n}.mp4`)]);
+    const d = join(dir, `cam${n}`); mkdirSync(d, { recursive: true });
+    sh('ffmpeg', ['-v', 'error', '-y', '-i', join(dir, `c${n}.mp4`), '-c', 'copy', '-f', 'hls', '-hls_time', '2', '-hls_playlist_type', 'vod',
+      '-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', 'init.mp4', '-hls_segment_filename', join(d, 'seg_%d.m4s'), join(d, 'index.m3u8')]);
+  }
+  const { plugin } = createMultiviewScheme(fakeShaka, { fetchBytes, xmlApi: null });
+  const q = [1, 2, 3, 4].map((n) => `&hls=${encodeURIComponent(`${base}/wpp1080/cam${n}/index.m3u8`)}`).join('');
+  try { await plugin(`mv://manifest/hls?cams=1,2,3,4&sync=independent${q}`, { uris: [] }, 0).promise; check(false, 'WPP + altura 360 deveria recusar'); }
+  catch (e) { check(/WPP e altura 360/.test(String(e.data && e.data[1] && e.data[1].message)), 'WPP + altura que não é múltipla do CTU: recusa com mensagem clara'); }
+}
+
+// Escolha de variante (master playlist / MPD): 4K não cabe no multiview.
+{
+  const v = (h, bw) => ({ uri: `u${h}`, bandwidth: bw, codecs: 'hvc1.1.6.L93.B0', width: h * 16 / 9, height: h });
+  const ladder = [v(2160, 15e6), v(1080, 6e6), v(540, 2e6), v(360, 1e6)];
+  check(pickVariant(ladder).uri === 'u2160', 'variante: padrão = maior');
+  check(pickVariant(ladder, 'lowest').uri === 'u360', 'variante: menor');
+  check(pickVariant(ladder, '540').uri === 'u540', 'variante: até 540p');
+  check(pickVariant(ladder, '700').uri === 'u540', 'variante: até 700p cai na maior que cabe (540)');
+  check(pickVariant([v(1080, 6e6), v(720, 3e6)], '360').uri === 'u720', 'variante: nada cabe, usa a menor');
+  const mpdText = (h, bw) => `<Representation id="r${h}" codecs="hvc1.1.6.L93.B0" width="${h * 16 / 9}" height="${h}" bandwidth="${bw}"><SegmentTemplate timescale="1" duration="2" initialization="i.mp4" media="s$Number$.m4s"/></Representation>`;
+  const mpdAll = `<MPD type="static" mediaPresentationDuration="PT4S"><Period><AdaptationSet mimeType="video/mp4">${mpdText(2160, 15e6)}${mpdText(540, 2e6)}</AdaptationSet></Period></MPD>`;
+  check(parseMpd(mpdAll, 'http://x/m.mpd', { rendition: '540' }).height === 540 && parseMpd(mpdAll, 'http://x/m.mpd').height === 2160, 'variante em MPD: até 540p x padrão');
 }
 
 // Modo comparação: 1 câmera, sem merge.

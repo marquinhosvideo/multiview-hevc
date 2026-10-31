@@ -54,7 +54,7 @@ function expand(tpl, vars) {
 //   { targetDuration, mediaSequence, endList, map, container, segments:[{seq, uri, dur, pdt}], source:'dash' }
 // opts.now: relógio (ms) para MPD dinâmico com @duration; opts.seqState: Map t->seq que o chamador
 // mantém entre atualizações, para os números de sequência continuarem consecutivos.
-export function parseMpd(text, baseUrl, { now = Date.now(), seqState = new Map() } = {}) {
+export function parseMpd(text, baseUrl, { now = Date.now(), seqState = new Map(), rendition = 'highest' } = {}) {
   const mpd = parseXml(text);
   if (!mpd || mpd.name !== 'MPD') throw new Error('não é um manifesto DASH (sem <MPD>)');
   if (mpd.attrs.type === 'dynamic' || mpd.attrs.type === undefined || mpd.attrs.type === 'static') { /* ok */ }
@@ -76,7 +76,15 @@ export function parseMpd(text, baseUrl, { now = Date.now(), seqState = new Map()
     throw new Error(`o canal DASH é H.264 (${cands[0].codecs}), não HEVC: tiles só existem em HEVC`);
   }
   const pool = hevc.length ? hevc : cands;
-  const { as, rep, codecs } = pool.sort((a, b) => Number(b.rep.attrs.bandwidth || 0) - Number(a.rep.attrs.bandwidth || 0))[0];
+  const hOf = (c) => Number(c.rep.attrs.height || c.as.attrs.height || 0);
+  const byBw = (a, b) => Number(b.rep.attrs.bandwidth || 0) - Number(a.rep.attrs.bandwidth || 0);
+  const byHeight = (a, b) => hOf(b) - hOf(a) || byBw(a, b);
+  const max = Number(rendition);
+  let chosen;
+  if (rendition === 'lowest') chosen = [...pool].sort((a, b) => -byHeight(a, b))[0];
+  else if (Number.isFinite(max) && max > 0) chosen = pool.filter((c) => hOf(c) && hOf(c) <= max).sort(byHeight)[0] || [...pool].sort((a, b) => -byHeight(a, b))[0];
+  else chosen = [...pool].sort(byBw)[0];
+  const { as, rep, codecs } = chosen;
 
   // BaseURL em cascata
   let base = baseUrl;

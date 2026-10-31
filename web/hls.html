@@ -29,6 +29,15 @@
 
     <div class="opts">
       <label class="chk"><input type="checkbox" id="proxy"> <span>Passar pelo servidor local <small id="proxyNote">(contorna CORS e alcança o que só a sua rede/VPN enxerga)</small></span></label>
+      <label class="sel">Qualidade dos canais
+        <select id="rendition">
+          <option value="lowest">Menor disponível</option>
+          <option value="540" selected>Até 540p (recomendado)</option>
+          <option value="720">Até 720p</option>
+          <option value="1080">Até 1080p</option>
+          <option value="highest">Maior disponível</option>
+        </select>
+      </label>
       <label class="chk"><input type="checkbox" id="indep" checked> <span>Canais independentes <small>(canais diferentes, sem relógio em comum: cada tile mostra o segmento mais recente do seu canal)</small></span></label>
       <button type="button" class="btn ghost" id="fillLocal">Usar o HLS local (<code>make hls-server</code>)</button>
     </div>

@@ -139,7 +139,7 @@ export function createMultiviewScheme(shakaNs, opts) {
           return urls[n - 1];
         });
         state.hls = state.hls || createHlsSource({ fetchBytes, presentationDelay, onEvent });
-        const m = await state.hls.refresh(chosen, { sync: u.searchParams.get('sync') || 'auto' });
+        const m = await state.hls.refresh(chosen, { sync: u.searchParams.get('sync') || 'auto', rendition: u.searchParams.get('rendition') || 'highest' });
         state.cameras = m.cameras.map((c, i) => ({ ...c, index: cams[i] }));
         state.merger = null; state.source = 'hls';
         onEvent({ type: 'manifest', cameras: state.cameras, width: m.width, height: m.height, grid: m.grid, source: 'hls', info: m.info });
@@ -148,7 +148,7 @@ export function createMultiviewScheme(shakaNs, opts) {
       const cam = Number(u.searchParams.get('cam'));
       if (!urls[cam - 1]) throw new Error(`Câmera ${cam} sem URL HLS`);
       const src = state.hlsCams[cam] = state.hlsCams[cam] || createHlsSource({ fetchBytes, presentationDelay, onEvent });
-      return te.encode((await src.refresh([urls[cam - 1]], { single: true })).text);
+      return te.encode((await src.refresh([urls[cam - 1]], { single: true, rendition: u.searchParams.get('rendition') || 'highest' })).text);
     }
     if (u.host === 'camseg') {
       const [, cam, file] = u.pathname.match(/^\/(\d+)\/(.+)$/) || [];

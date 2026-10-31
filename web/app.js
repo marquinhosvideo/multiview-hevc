@@ -30,6 +30,7 @@ function hlsFromUrl() {
 const ui = {
   source: hlsFromUrl() ? 'hls' : 'dash',
   hls: hlsFromUrl() || storedHls(),
+  rendition: params.get('rendition') || '540',
   sync: params.get('sync') === 'auto' ? 'auto' : 'independent', // canais diferentes: sem relógio em comum
   proxy: params.has('proxy') ? params.get('proxy') === '1' : storedProxy(),
   mode: params.get('mode') === 'compare' ? 'compare' : 'merge',
@@ -148,7 +149,7 @@ async function start() {
     if (ui.mode === 'merge') {
       const video = $('#video');
       const uri = ui.source === 'hls'
-        ? `mv://manifest/hls?cams=${cams.join(',')}&sync=${ui.sync}${hlsQuery()}`
+        ? `mv://manifest/hls?cams=${cams.join(',')}&sync=${ui.sync}&rendition=${ui.rendition}${hlsQuery()}`
         : `mv://manifest/merge?cams=${cams.join(',')}&mpd=${encodeURIComponent(MPD)}`;
       log(`Multiview: 1 player Shaka, câmeras ${cams.join(', ')} (${ui.source === 'hls' ? 'HLS' : 'DASH'})`);
       const player = await newPlayer(video, uri, 'multiview');
@@ -162,7 +163,7 @@ async function start() {
         $('#compare').append(fig);
         const video = fig.querySelector('video');
         const uri = ui.source === 'hls'
-          ? `mv://manifest/hlscam?cam=${cam}${hlsQuery()}`
+          ? `mv://manifest/hlscam?cam=${cam}&rendition=${ui.rendition}${hlsQuery()}`
           : `mv://manifest/cam?cam=${cam}&mpd=${encodeURIComponent(MPD)}`;
         const player = await newPlayer(video, uri, `CAM ${cam}`);
         if (session && session.token === token) session.players.push({ player, video, cam });
@@ -277,8 +278,9 @@ function draw() {
   const order = [focusIdx, ...geometry.tiles.keys()].filter((i, k, a) => a.indexOf(i) === k);
   for (const i of order) {
     const t = geometry.tiles[i];
-    const d = fit(t.w, t.h, cells[i]);
-    ctx.drawImage(v, t.x, t.y, t.w, t.h, d.x, d.y, d.w, d.h);
+    const vis = t.vis || { x: 0, y: 0, w: t.w, h: t.h }; // sem a janela de corte do SPS (ex.: 544 -> 540 linhas)
+    const d = fit(vis.w, vis.h, cells[i]);
+    ctx.drawImage(v, t.x + vis.x, t.y + vis.y, vis.w, vis.h, d.x, d.y, d.w, d.h);
     if (ui.layout === 'pip' && i !== focusIdx) {
       ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 2 * dpr; ctx.strokeRect(d.x, d.y, d.w, d.h);
     }

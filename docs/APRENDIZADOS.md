@@ -150,3 +150,11 @@ mesma linha do Homebrew 26.07) tudo funcionou. Use a versão do Homebrew.
   os elementos do slice header da câmera isolada e do seu slice no merge (P e B, com pesos
   reais). Isso prova o cabeçalho, não os pixels: com x265 os vetores podem cruzar a borda do
   tile, então a prova de pixels continua sendo `make check-hls` com um encode restrito.
+- **Resolução, CTU e canvas (canais de TV).** Tile não precisa ter largura *e* altura múltiplas do
+  CTU: só os limites *entre* tiles caem em fronteira de CTU (a última coluna/linha pode ser
+  parcial). Com largura múltipla e altura não (1080p, 540p, 2160p com CTU 64) o merge usa 1
+  fileira de tiles; com WPP, 1 coluna (e aí a altura tem de ser múltipla). O canvas passa a
+  somar tudo: 4 canais 4K = 15360x2160, inviável; 4 x 960x540 = 3840x544 e 4 x 1920x1080 =
+  7680x1080 passaram bit a bit no FFmpeg (fontes só intra). O `general_level_idc` do canvas (SPS,
+  VPS e hvcC) é elevado ao necessário para o tamanho; a taxa de amostras (MaxLumaSr, depende
+  do fps) não é verificada. Decoders de hardware podem recusar o que o FFmpeg aceita.

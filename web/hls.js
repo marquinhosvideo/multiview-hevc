@@ -29,11 +29,21 @@ export function parseMaster(text, baseUrl) {
   return variants.sort((x, y) => y.bandwidth - x.bandwidth);
 }
 
-// Escolhe a variante HEVC de maior banda (ou a maior, se o master não disser o codec).
-export function pickVariant(variants) {
+// Escolhe a variante HEVC. rendition: 'highest' (padrão: maior banda), 'lowest' (menor resolução) ou um
+// número N = a maior variante com altura até N (cai para a menor se nenhuma couber). Multiview de
+// canais em 4K não cabe num decoder: o certo é usar uma variante pequena de cada canal.
+export function pickVariant(variants, rendition = 'highest') {
   if (!variants.length) throw new Error('playlist master sem variantes');
   const hevc = variants.filter((v) => /hvc1|hev1|hevc/i.test(v.codecs));
-  return (hevc[0] || variants[0]);
+  const pool = hevc.length ? hevc : variants;
+  const byHeightThenBw = (a, b) => (b.height || 0) - (a.height || 0) || b.bandwidth - a.bandwidth;
+  if (rendition === 'lowest') return [...pool].sort((a, b) => -byHeightThenBw(a, b))[0];
+  const max = Number(rendition);
+  if (Number.isFinite(max) && max > 0) {
+    const fit = pool.filter((v) => v.height && v.height <= max).sort(byHeightThenBw);
+    return fit[0] || [...pool].sort((a, b) => -byHeightThenBw(a, b))[0];
+  }
+  return pool[0];
 }
 
 // Playlist de mídia -> { targetDuration, mediaSequence, endList, map, container, segments }.

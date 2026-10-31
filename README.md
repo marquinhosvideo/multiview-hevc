@@ -195,6 +195,21 @@ própria para o multiview, produzida com o mesmo template de encoder nos 4 canai
 Para câmeras de um mesmo evento, com relógio comum, use `--sync auto` (CLI) ou
 desmarque *Canais independentes*.
 
+**Resolução dos canais (4K não cabe).** O canvas do merge soma os tiles: 4 canais 4K
+(3840×2160) dão 15360×2160, muito além do que qualquer decoder de celular ou TV aguenta
+(muitos limitam o quadro a 4096 por lado e a ~8,9 Mpixels). Para multiview, use uma
+**variante pequena** de cada canal: a página tem *Qualidade dos canais* (padrão *até
+540p*; também `?rendition=lowest|540|720|1080|highest` e `--rendition` no CLI), que
+escolhe a variante nas master playlists HLS e nos MPDs DASH. Exemplos de canvas com 4
+canais: 960×540 → 3840×544 (cabe num decoder 4K); 1280×720 → 5120×720 ou 2560×1440;
+1920×1080 → 7680×1080 (limite do hardware recente).
+
+Os tiles só precisam ter **largura ou altura múltipla do CTU**, não as duas: com CTU 64,
+1080p/540p/2160p (altura não múltipla, largura múltipla) vão numa fileira só; 1024×576 vai
+em grade 2×2; com WPP, empilhados. O nível HEVC do canvas é elevado quando o canal sinaliza
+um nível menor que o necessário, e a janela de corte do SPS (544→540 linhas) é aplicada na
+hora de desenhar.
+
 **Interface web para colar os 4 streams:**
 
 ```bash

@@ -1,6 +1,6 @@
 // Diagnóstico de 4 (ou 2) streams HLS: dá para fazer o merge de tiles com eles?
 //
-//   node tools/check-hls.mjs [--segments N] [--sync independent|auto] [--no-decode] URL_CAM1 URL_CAM2 URL_CAM3 URL_CAM4
+//   node tools/check-hls.mjs [--segments N] [--sync independent|auto] [--rendition highest|lowest|540] [--no-decode] URL_CAM1 URL_CAM2 URL_CAM3 URL_CAM4
 //   make check-hls HLS="URL1 URL2 URL3 URL4"
 //
 // Faz o que o player faz (lê as playlists, alinha, remuxa TS se for o caso, junta
@@ -18,6 +18,7 @@ const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(name); if (i < 0) return def; const v = args[i + 1]; args.splice(i, 2); return v; };
 const noDecode = args.includes('--no-decode'); if (noDecode) args.splice(args.indexOf('--no-decode'), 1);
 const nSeg = Number(opt('--segments', 3));
+const rendition = opt('--rendition', 'highest'); // highest | lowest | altura máxima (ex.: 540)
 const sync = opt('--sync', 'independent'); // independent (canais diferentes) | auto (câmeras sincronizadas)
 const urls = args;
 if (urls.length !== 2 && urls.length !== 4) {
@@ -29,7 +30,7 @@ const mark = { ok: '\x1b[32m✔\x1b[0m', warn: '\x1b[33m!\x1b[0m', bad: '\x1b[31
 const res = { bad: 0, warn: 0 };
 const say = (kind, msg) => { console.log(`${mark[kind]} ${msg}`); if (kind !== 'ok') res[kind]++; };
 
-const d = await diagnose(urls, { fetchBytes, segments: nSeg, sync });
+const d = await diagnose(urls, { fetchBytes, segments: nSeg, sync, rendition });
 if (!d.ok && !d.canvas) {
   for (const c of d.checks) say(c.kind, c.msg);
   console.log('\nVeredito: com estes streams o merge NÃO funciona como estão.');

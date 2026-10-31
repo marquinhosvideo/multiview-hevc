@@ -20,6 +20,8 @@ const store = {
 };
 proxyBox.checked = proxyOk && store.get('mv.proxy', true);
 proxyBox.addEventListener('change', () => { store.set('mv.proxy', proxyBox.checked); invalidate(); });
+$('#rendition').value = store.get('mv.rendition', '540');
+$('#rendition').addEventListener('change', () => { store.set('mv.rendition', $('#rendition').value); invalidate(); });
 
 const fetcher = () => (proxyBox.checked ? (u) => fetchBytes(`/proxy?url=${encodeURIComponent(u)}`) : fetchBytes);
 
@@ -72,7 +74,7 @@ $('#form').addEventListener('submit', async (e) => {
   checkBtn.disabled = true; invalidate();
 
   let d;
-  try { d = await diagnose(urls, { fetchBytes: fetcher(), segments: 3, sync: $('#indep').checked ? 'independent' : 'auto' }); }
+  try { d = await diagnose(urls, { fetchBytes: fetcher(), segments: 3, sync: $('#indep').checked ? 'independent' : 'auto', rendition: $('#rendition').value }); }
   catch (err) { d = { ok: false, checks: [{ kind: 'bad', msg: String(err && err.message || err) }] }; }
   checkBtn.disabled = false;
   $('#status').className = 'status';
@@ -107,6 +109,6 @@ $('#form').addEventListener('submit', async (e) => {
 
 playBtn.addEventListener('click', () => {
   const urls = inputs.map((i) => i.value.trim());
-  const q = new URLSearchParams({ hls: urls.join(','), proxy: proxyBox.checked ? '1' : '0', sync: $('#indep').checked ? 'independent' : syncForPlay });
+  const q = new URLSearchParams({ hls: urls.join(','), proxy: proxyBox.checked ? '1' : '0', sync: $('#indep').checked ? 'independent' : syncForPlay, rendition: $('#rendition').value });
   location.href = `index.html?${q}`;
 });

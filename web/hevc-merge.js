@@ -153,7 +153,8 @@ export function parseSps(nal) {
   s.width = r.ue(); s.height = r.ue();
   s.posAfterSize = r.pos;
   s.conformanceWindow = r.flag();
-  if (s.conformanceWindow) { r.ue(); r.ue(); r.ue(); r.ue(); }
+  s.confWin = { left: 0, right: 0, top: 0, bottom: 0 };
+  if (s.conformanceWindow) { s.confWin = { left: r.ue(), right: r.ue(), top: r.ue(), bottom: r.ue() }; }
   s.posAfterConf = r.pos;
   s.bitDepthLuma = r.ue() + 8; s.bitDepthChroma = r.ue() + 8;
   s.log2MaxPocLsb = r.ue() + 4;
@@ -500,6 +501,25 @@ export function gridFor(n) {
 
 const sameBytes = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 
+// Menor nível HEVC (general_level_idc = nível x 30) cujo tamanho máximo de quadro comporta w x h.
+const LEVELS = [[30, 36864], [60, 122880], [63, 245760], [90, 552960], [93, 983040], [120, 2228224], [123, 2228224],
+  [150, 8912896], [153, 8912896], [156, 8912896], [180, 35651584], [183, 35651584], [186, 35651584]];
+export function levelForSize(w, h) {
+  for (const [idc, maxPs] of LEVELS) {
+    const maxDim = Math.sqrt(8 * maxPs);
+    if (w * h <= maxPs && w <= maxDim && h <= maxDim) return idc;
+  }
+  return 186;
+}
+
+// VPS com o general_level_idc trocado (byte 17 do RBSP: 2 de cabeçalho NAL + 4 de campos + 11 de PTL).
+function patchVpsLevel(nal, level) {
+  const rbsp = toRbsp(nal);
+  if (rbsp.length <= 17 || rbsp[17] >= level) return nal;
+  const out = rbsp.slice(); out[17] = level;
+  return toEbsp(out);
+}
+
 // Cria o contexto do merge a partir dos inits das câmeras (na ordem dos tiles).
 export function createMerger(cameraInits) {
   const cams = cameraInits.map(parseCameraInit);
@@ -510,24 +530,45 @@ export function createMerger(cameraInits) {
     }
   }
   const { sps, pps } = c0;
-  if (sps.width % sps.ctbSize || sps.height % sps.ctbSize) {
-    throw new Error(`Tile ${sps.width}x${sps.height} não é múltiplo do CTU (${sps.ctbSize})`);
-  }
-  // Com WPP, tiles lado a lado perdem o sincronismo do CABAC em decoders reais (a sincronização das
-  // linhas de CTU assume a largura do quadro); empilhados em 1 coluna o tile tem a largura do quadro e
-  // o decode é o do WPP normal. Os layouts da página só recortam o frame, então a disposição não importa.
-  const { cols, rows } = c0.pps.entropyCodingSync ? { cols: 1, rows: cams.length } : gridFor(cams.length);
+  const n = cams.length, ctb = sps.ctbSize, wpp = pps.entropyCodingSync;
+  const okW = sps.width % ctb === 0, okH = sps.height % ctb === 0;
+  // Os limites entre tiles têm de cair em fronteiras de CTU; só a última coluna/linha pode ser parcial.
+  //  - WPP: tiles lado a lado perdem o sincronismo do CABAC em decoders reais (a sincronização das
+  //    linhas de CTU assume a largura do quadro); empilhados em 1 coluna o tile tem a largura do quadro.
+  //  - largura e altura múltiplas do CTU: grade (2x2 ou 2x1), como sempre.
+  //  - só a largura é (ex.: 1920x1080, 3840x2160, 960x540): 1 fileira de tiles; a altura fica livre.
+  //  - só a altura é: 1 coluna.
+  // Os layouts da página só recortam o frame, então a disposição dos tiles não aparece para quem assiste.
+  let cols, rows;
+  if (n < 2 || n > 4) throw new Error(`Multiview de ${n} canais não suportado (use 2 a 4)`);
+  if (wpp) {
+    if (!okH) throw new Error(`Canal com WPP e altura ${sps.height} não múltipla do CTU (${ctb}): com WPP os tiles têm de ficar empilhados, e a altura precisa ser múltipla do CTU; desligue o WPP no encoder`);
+    cols = 1; rows = n;
+  } else if (okW && okH) ({ cols, rows } = n === 3 ? { cols: 3, rows: 1 } : gridFor(n));
+  else if (okW) { cols = n; rows = 1; }
+  else if (okH) { cols = 1; rows = n; }
+  else throw new Error(`Tile ${sps.width}x${sps.height}: nem a largura nem a altura é múltipla do CTU (${ctb}); use outra resolução ou um encoder com CTU menor`);
   const width = sps.width * cols, height = sps.height * rows;
-  const picWCtbs = width / sps.ctbSize, picHCtbs = height / sps.ctbSize;
+  const picWCtbs = Math.ceil(width / ctb), picHCtbs = Math.ceil(height / ctb);
   const addrBits = Math.ceil(Math.log2(picWCtbs * picHCtbs));
+  // Janela de corte do SPS (ex.: 540 linhas codificadas como 544): o canvas a descarta, então cada tile
+  // guarda a área visível para o render recortar.
+  const sw = sps.chromaFormatIdc === 1 || sps.chromaFormatIdc === 2 ? 2 : 1, sh = sps.chromaFormatIdc === 1 ? 2 : 1;
+  const vis = { x: sps.confWin.left * sw, y: sps.confWin.top * sh };
+  vis.w = sps.width - vis.x - sps.confWin.right * sw; vis.h = sps.height - vis.y - sps.confWin.bottom * sh;
   const tiles = cams.map((_, k) => {
     const col = k % cols, row = Math.floor(k / cols);
     return {
-      x: col * sps.width, y: row * sps.height, w: sps.width, h: sps.height,
-      ctbAddr: row * (sps.height / sps.ctbSize) * picWCtbs + col * (sps.width / sps.ctbSize),
+      x: col * sps.width, y: row * sps.height, w: sps.width, h: sps.height, vis,
+      ctbAddr: row * Math.ceil(sps.height / ctb) * picWCtbs + col * (sps.width / ctb),
     };
   });
-  const canvasSps = buildCanvasSps(sps, width, height);
+  // O canvas pode exceder o nível sinalizado pelo canal (ex.: 4 canais de 1080p precisam de nível 5): sobe o nível.
+  const level = Math.max(sps.rbsp[14], levelForSize(width, height));
+  const patched = { ...sps, rbsp: Object.assign(sps.rbsp.slice(), { 14: level }) };
+  const vpsNal = patchVpsLevel(c0.hvcC.vps, level);
+  const hvcHeader = Uint8Array.from(c0.hvcC.header); hvcHeader[12] = level;
+  const canvasSps = buildCanvasSps(patched, width, height);
   const canvasPps = buildCanvasPps(pps, cols, rows);
 
   // Init segment do canvas: o da câmera 1 com hvcC e dimensões trocados.
@@ -540,12 +581,12 @@ export function createMerger(cameraInits) {
   const pre = entry.prefix.slice();
   pre[24] = width >> 8; pre[25] = width & 255; pre[26] = height >> 8; pre[27] = height & 255;
   entry.prefix = pre;
-  find(entry.children, 'hvcC').data = buildHvcC(c0.hvcC.header, c0.hvcC.vps, canvasSps, canvasPps);
+  find(entry.children, 'hvcC').data = buildHvcC(hvcHeader, vpsNal, canvasSps, canvasPps);
   entry.children = entry.children.filter((b) => b.type === 'hvcC' || b.type === 'pasp' || b.type === 'colr');
   const init = concat(initBoxes.map(serialize));
 
   return {
-    width, height, cols, rows, tiles, init,
+    width, height, cols, rows, tiles, init, level,
     codecTile: { width: sps.width, height: sps.height, ctb: sps.ctbSize },
     wpp: c0.pps.entropyCodingSync,
     mergeSegment: (segments, opts) => mergeSegment(cams, tiles, addrBits, segments, opts),
