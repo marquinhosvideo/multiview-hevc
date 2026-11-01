@@ -257,9 +257,10 @@ function buildCanvasPps(pps, cols, rows) {
 // ---------------------------------------------------------------------------
 
 // Reescreve um slice (1 por quadro da câmera) como o slice de um tile do canvas.
-function rewriteSlice(nal, sps, pps, isFirst, ctbAddr, addrBits) {
+function rewriteSlice(nal, sps, pps, isFirst, ctbAddr, addrBits, meta = {}) {
   const rbsp = toRbsp(nal);
   const type = nalType(rbsp);
+  meta.type = type; meta.tid = rbsp[1] & 7; meta.poc = 0; meta.rps = ''; meta.tmvp = false;
   const r = new BitReader(rbsp, 16);
   if (!r.flag()) throw new Error('A câmera tem mais de um slice por quadro; o merge espera 1');
   const isIrap = type >= 16 && type <= 23;
@@ -270,16 +271,19 @@ function rewriteSlice(nal, sps, pps, isFirst, ctbAddr, addrBits) {
   const midStart = r.pos;
   r.skip(pps.numExtraSliceHeaderBits);
   const sliceType = r.ue(); // 0=B 1=P 2=I
+  meta.sliceType = sliceType;
   if (pps.outputFlagPresent) r.skip(1);
   if (sps.separateColourPlane) r.skip(2);
   let sliceTmvp = false;
   if (type !== 19 && type !== 20) {
-    r.skip(sps.log2MaxPocLsb);
+    meta.poc = r.u(sps.log2MaxPocLsb);
+    const rpsStart = r.pos;
     const fromSps = r.flag();
     if (!fromSps) parseStRps(r, sps.numStRps, sps.numStRps, sps.rpsDeltas);
     else if (sps.numStRps > 1) r.skip(Math.ceil(Math.log2(sps.numStRps)));
+    meta.rps = Array.from({ length: r.pos - rpsStart }, (_, i) => (rbsp[(rpsStart + i) >> 3] >> (7 - ((rpsStart + i) & 7))) & 1).join('');
     if (sps.longTermRefsPresent) throw new Error('long-term refs não suportado');
-    if (sps.temporalMvpEnabled) sliceTmvp = r.flag();
+    if (sps.temporalMvpEnabled) { sliceTmvp = r.flag(); meta.tmvp = sliceTmvp; }
   }
   let saoLuma = false, saoChroma = false;
   if (sps.saoEnabled) {
@@ -679,6 +683,33 @@ export function inspectSegment(bytes) {
 // opts.baseTime: força o tfdt da saída (modo independente: o tempo é o do manifesto, não o de nenhuma câmera).
 // opts.ignoreTime: câmeras independentes têm origens de tempo diferentes (tfdt); a saída usa o
 // tempo da câmera 1 e os quadros são pareados por posição. A contagem de quadros ainda tem de bater.
+const NAL_NAMES = { 0: 'TRAIL_N', 1: 'TRAIL_R', 2: 'TSA_N', 3: 'TSA_R', 4: 'STSA_N', 5: 'STSA_R', 6: 'RADL_N', 7: 'RADL_R', 8: 'RASL_N', 9: 'RASL_R',
+  16: 'BLA_W_LP', 17: 'BLA_W_RADL', 18: 'BLA_N_LP', 19: 'IDR_W_RADL', 20: 'IDR_N_LP', 21: 'CRA' };
+
+// Os slices de um mesmo quadro têm de concordar em tipo de NAL, POC, conjunto de referências e TMVP (7.4.7.1);
+// se as câmeras têm GOPs diferentes, o quadro costurado seria inválido e o decoder trava ou corrompe.
+function checkSameStructure(metas, frameIdx) {
+  const m0 = metas[0];
+  const irap = (t) => t >= 16 && t <= 23;
+  const inter = metas.some((m) => m.sliceType !== 2); // algum slice P/B: o quadro depende de outros quadros
+  for (let k = 1; k < metas.length; k++) {
+    const m = metas[k];
+    let what = null;
+    if (irap(m.type) !== irap(m0.type)) what = `IDR/CRA num canal e quadro comum no outro (CAM 1: ${NAL_NAMES[m0.type] ?? m0.type}, CAM ${k + 1}: ${NAL_NAMES[m.type] ?? m.type})`;
+    else if (inter) { // em quadros só intra os decoders toleram estas diferenças; com predição, não
+      what = m.type !== m0.type ? `tipo de quadro (CAM 1: ${NAL_NAMES[m0.type] ?? m0.type}, CAM ${k + 1}: ${NAL_NAMES[m.type] ?? m.type})`
+        : m.tid !== m0.tid ? 'camada temporal'
+        : m.poc !== m0.poc ? `contagem de ordem do quadro (POC: CAM 1 = ${m0.poc}, CAM ${k + 1} = ${m.poc})`
+        : m.rps !== m0.rps ? 'conjunto de quadros de referência (RPS)'
+        : m.tmvp !== m0.tmvp ? 'slice_temporal_mvp_enabled_flag' : null;
+    }
+    if (what) {
+      throw new Error(`quadro ${frameIdx + 1} do segmento: os canais diferem em ${what}. Os canais não têm a mesma estrutura de GOP ` +
+        '(IDR ou referências em posições diferentes), então o quadro costurado seria inválido: o decoder trava ou corrompe a imagem');
+    }
+  }
+}
+
 function tfdtAt(t) {
   const d = new Uint8Array(12);
   d[0] = 1; writeU32(d, 4, Math.floor(t / 2 ** 32)); writeU32(d, 8, t % 2 ** 32);
@@ -719,14 +750,17 @@ function mergeSegment(cams, tiles, addrBits, segments, opts = {}) {
 
     // Amostras do canvas.
     const merged = f0.samples.map((_, i) => {
-      const parts = [];
+      const parts = [], metas = [];
       frags.forEach((fr, k) => {
         const vcl = splitNals(fr.samples[i].bytes).filter((n) => nalType(n) < 32);
         if (vcl.length !== 1) throw new Error(`câmera ${k + 1}: ${vcl.length} slices no quadro ${i} (esperado 1)`);
-        const nal = rewriteSlice(vcl[0], sps, pps, k === 0, tiles[k].ctbAddr, addrBits);
+        const meta = {};
+        const nal = rewriteSlice(vcl[0], sps, pps, k === 0, tiles[k].ctbAddr, addrBits, meta);
+        metas.push(meta);
         const len = new Uint8Array(4); writeU32(len, 0, nal.length);
         parts.push(len, nal);
       });
+      checkSameStructure(metas, i);
       return concat(parts);
     });
 

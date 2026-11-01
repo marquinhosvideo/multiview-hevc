@@ -203,6 +203,58 @@ check(r4.events.some((e) => e.type === 'manifest' && e.info.containers.every((c)
   }
 }
 
+// GOPs diferentes: a câmera 4 tem um IDR no meio do segmento (quadro 30) e as outras não. O quadro costurado
+// misturaria slices IDR e não-IDR, então o merge recusa dizendo o motivo; ao vivo, o segmento ruim é descartado
+// na pré-validação e o resto toca (sem isso o decoder travava no quadro 30).
+// A: só o 1º segmento da câmera 4 tem IDR a cada 30 quadros (o resto, a cada 60). B: todos os segmentos.
+for (const label of ['A', 'B']) {
+  const dir = join(work, `gop${label}`); mkdirSync(dir, { recursive: true });
+  const enc = (n, secs, keyint, out) => sh('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', `smptebars=s=${W}x${H}:r=30`, '-t', String(secs), '-vf', 'format=yuv420p,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv',
+    '-c:v', 'libx265', '-x265-params', `keyint=${keyint}:min-keyint=${keyint}:open-gop=0:scenecut=0:bframes=0:slices=1:no-wpp=1:temporal-mvp=0:weightp=0:repeat-headers=1:log-level=error`, '-f', 'hevc', out]);
+  for (let n = 1; n <= 4; n++) {
+    const raw = join(dir, `c${n}.hevc`);
+    if (n < 4) enc(n, 6, 60, raw);
+    else if (label === 'B') enc(n, 6, 30, raw);
+    else { enc(n, 2, 30, join(dir, 'p1.hevc')); enc(n, 4, 60, join(dir, 'p2.hevc')); writeFileSync(raw, Buffer.concat([readFileSync(join(dir, 'p1.hevc')), readFileSync(join(dir, 'p2.hevc'))])); }
+    const d = join(dir, `cam${n}`); mkdirSync(d, { recursive: true });
+    sh('ffmpeg', ['-v', 'error', '-y', '-f', 'hevc', '-framerate', '30', '-i', raw, '-c', 'copy', '-tag:v', 'hvc1', '-f', 'hls', '-hls_time', '2', '-hls_playlist_type', 'vod',
+      '-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', 'init.mp4', '-hls_segment_filename', join(d, 'seg_%d.m4s'), join(d, 'index.m3u8')]);
+    const pl = readFileSync(join(d, 'index.m3u8'), 'utf8');
+    writeFileSync(join(d, 'live.m3u8'), pl.replace('#EXT-X-ENDLIST', '').replace('#EXT-X-PLAYLIST-TYPE:VOD', ''));
+  }
+}
+{
+  const mk = (set, file) => [1, 2, 3, 4].map((n) => `&hls=${encodeURIComponent(`${base}/gop${set}/cam${n}/${file}`)}`).join('');
+  // VOD: o segmento 0 falha com o motivo; os outros seguem.
+  const evs = [];
+  const { plugin } = createMultiviewScheme(fakeShaka, { fetchBytes, xmlApi: null, onEvent: (e) => evs.push(e) });
+  const call = async (uri) => new Uint8Array((await plugin(uri, { uris: [uri] }, 0).promise).data);
+  const mpdV = new TextDecoder().decode(await call(`mv://manifest/hls?cams=1,2,3,4&sync=independent${mk('A', 'index.m3u8')}`));
+  const tv = [...mpdV.matchAll(/<S t="(\d+)"/g)].map((x) => Number(x[1]));
+  let msg = '';
+  try { await call(`mv://seg/${tv[0]}.m4s`); } catch (e) { msg = String(e.data && e.data[1] && e.data[1].message); }
+  check(/quadro 31 do segmento/.test(msg) && /IDR\/CRA num canal e quadro comum no outro/.test(msg) && /GOP/.test(msg), `GOP diferente (VOD): o merge recusa o quadro 31 com o motivo (${msg.slice(0, 70)}…)`);
+  let okOthers = true;
+  try { await call(`mv://seg/${tv[1]}.m4s`); } catch { okOthers = false; }
+  check(okOthers, 'GOP diferente (VOD): os segmentos seguintes, com GOP igual, costuram normalmente');
+
+  // Ao vivo: o segmento ruim é descartado antes de entrar na lista.
+  const evL = [];
+  const pl = createMultiviewScheme(fakeShaka, { fetchBytes, xmlApi: null, onEvent: (e) => evL.push(e) }).plugin;
+  const callL = async (uri) => new Uint8Array((await pl(uri, { uris: [uri] }, 0).promise).data);
+  const mpdL = new TextDecoder().decode(await callL(`mv://manifest/hls?cams=1,2,3,4&sync=independent${mk('A', 'live.m3u8')}`));
+  const tl = [...mpdL.matchAll(/<S t="(\d+)"/g)].map((x) => Number(x[1]));
+  check(tl.length === 1 && evL.some((e) => e.type === 'warning' && /descartado/.test(e.message)), `GOP diferente (ao vivo): segmento ruim descartado, ${tl.length} de 2 segue`);
+  const { firstDecodeTime: fdt } = await import('../web/hevc-merge.js');
+  let okTimes = true;
+  for (const t of tl) if (fdt(await callL(`mv://seg/${t}.m4s`)) !== t) okTimes = false;
+  check(okTimes, 'GOP diferente (ao vivo): a lista não tem buraco e o tfdt segue o manifesto');
+  // Todos ruins: erro claro em vez de uma lista vazia.
+  const pl2 = createMultiviewScheme(fakeShaka, { fetchBytes, xmlApi: null }).plugin;
+  try { await pl2(`mv://manifest/hls?cams=1,2,3,4&sync=independent${mk('B', 'live.m3u8')}`, { uris: [] }, 0).promise; check(false, 'todos os segmentos ruins deveriam recusar'); }
+  catch (e) { check(/nenhum segmento (recente pôde ser costurado|tem a mesma duração)/.test(String(e.data && e.data[1] && e.data[1].message)), 'GOP diferente em todos os segmentos (ao vivo): erro claro (nenhum segmento costura ou durações diferentes), em vez de uma lista vazia'); }
+}
+
 // Mistura: 3 câmeras fMP4 (1 fragmento por quadro) + 1 em TS (1 fragmento por segmento).
 // O TS começa o PTS em 1,4 s e o fMP4 em 0: com relógios diferentes, o modo estrito recusa e o independente aceita.
 {
@@ -265,7 +317,8 @@ await run('HLS + DASH misturados', [`${base}/fmp4/cam1/index.m3u8`, `${base}/fmp
 // o que está em jogo é só o cabeçalho com a tabela de pesos (L0, e L0+L1 com B-frames) ter sido lido e copiado certo.
 for (const [label, extra, bipred] of [['P', 'bframes=0:weightp=1', false], ['B', 'bframes=3:weightp=1:weightb=1', true]]) {
   const dir = join(work, `wp${label}`); mkdirSync(dir, { recursive: true });
-  const bars = ['smptebars', 'smptehdbars', 'pal75bars', 'pal100bars'];
+  // Mesmo conteúdo nas 4 câmeras: o x265 decide a estrutura do GOP por conteúdo, e o merge exige a mesma estrutura.
+  const bars = ['smptebars', 'smptebars', 'smptebars', 'smptebars'];
   for (let n = 1; n <= 4; n++) {
     sh('ffmpeg', ['-v', 'error', '-y', '-f', 'lavfi', '-i', `${bars[n - 1]}=s=${W}x${H}:r=30`, '-t', '4', '-vf',
       'fade=t=in:st=0:d=2,fade=t=out:st=2:d=2,format=yuv420p,setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv',

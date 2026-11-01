@@ -77,7 +77,8 @@ function makeCamera(index, url, io) {
 export function createHlsSource(opts) {
   const { fetchBytes, presentationDelay = 6, onEvent = () => {} } = opts;
   const io = { fetchBytes, cached: makeCache(fetchBytes), rendition: () => st.rendition };
-  const st = { skipped: 0, allowWppRow: false, rendition: 'highest', sync: null, offsets: null, cams: [], merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map(), info: null };
+  const PREMERGE = 6; // quantos segmentos recentes são costurados (e validados) a cada atualização, ao vivo
+  const st = { bad: new Set(), mergedCache: new Map(), lastError: '', skipped: 0, allowWppRow: false, rendition: 'highest', sync: null, offsets: null, cams: [], merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map(), info: null };
 
   // Mensagem para quando nenhum par de segmentos tem a mesma duração: mostra, por canal, o que cada um faz.
   async function explainDurations(lists) {
@@ -101,7 +102,7 @@ export function createHlsSource(opts) {
     if (st.allowWppRow !== !!wppRow) { st.allowWppRow = !!wppRow; st.merger = null; }
     if (st.rendition !== String(rendition)) { st.rendition = String(rendition); st.cams = []; }
     if (st.cams.length !== urls.length || st.cams.some((c, i) => c.url !== urls[i])) {
-      Object.assign(st, { sync: null, offsets: null, cams: urls.map((u, i) => makeCamera(i + 1, u, io)), merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map() });
+      Object.assign(st, { bad: new Set(), mergedCache: new Map(), lastError: '', sync: null, offsets: null, cams: urls.map((u, i) => makeCamera(i + 1, u, io)), merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map() });
     }
     const lists = await Promise.all(st.cams.map((c) => c.load()));
     for (const [i, l] of lists.entries()) {
@@ -155,27 +156,58 @@ export function createHlsSource(opts) {
     const ts = st.cams[0].timescale;
 
     // Linha do tempo: âncora = tfdt do 1º segmento visto; depois soma EXTINF.
-    if (!st.anchored) {
-      const bytes = await st.cams[0].segment(firstSlot.uris[0]);
-      const t0 = firstDecodeTime(bytes);
-      st.timeline.set(firstSlot.id, { t: t0, d: Math.round(firstSlot.dur * ts), pdt: firstSlot.pdt });
-      st.anchored = true;
-      if (firstSlot.pdt !== null) st.asat = firstSlot.pdt - (t0 / ts) * 1000;
-    }
-    const known = [...st.timeline.keys()];
-    if (aligned.slots[0].id < Math.min(...known)) { st.timeline.clear(); st.anchored = false; throw Object.assign(new Error('playlist voltou no tempo; reiniciando'), { status: 503 }); }
-    for (const s of aligned.slots) {
-      if (st.timeline.has(s.id)) continue;
-      const prev = st.timeline.get(Math.max(...st.timeline.keys()));
-      st.timeline.set(s.id, { t: prev.t + prev.d, d: Math.round(s.dur * ts), pdt: s.pdt });
-    }
-    // Janela atual: só o que ainda está na playlist; descarta o resto do histórico.
-    const ids = new Set(aligned.slots.map((s) => s.id));
-    for (const id of [...st.timeline.keys()]) if (!ids.has(id) && id < aligned.slots[0].id - 4) st.timeline.delete(id);
-
-    st.slotsByTime = new Map(aligned.slots.map((s) => [st.timeline.get(s.id).t, s]));
+    // Ao vivo (não single), cada segmento novo é costurado AQUI, antes de entrar na lista: um segmento que não
+    // costura (GOP diferente, quadros a mais) é descartado em vez de parar o player no meio do vídeo, e o
+    // merge já está pronto quando o Shaka pede o segmento.
     const live = !lists[0].endList;
-    const win = aligned.slots.map((s) => ({ ...st.timeline.get(s.id) }));
+    const premerge = live && !single;
+    let slots = aligned.slots;
+    if (premerge) slots = slots.slice(-PREMERGE);
+    const mergeOpts = (t) => (st.offsets !== null ? { ignoreTime: true, baseTime: t } : {});
+    const tryAdd = async (s, t) => {
+      if (premerge) {
+        if (st.bad.has(s.id)) return false;
+        try { await mergeSlot(s, t); }
+        catch (e) {
+          st.bad.add(s.id); st.lastError = e.message;
+          onEvent({ type: 'warning', message: `segmento ${s.id} descartado: ${e.message}` });
+          return false;
+        }
+      }
+      st.timeline.set(s.id, { t, d: Math.round(s.dur * ts), pdt: s.pdt });
+      return true;
+    };
+    const mergeSlot = async (s, t) => {
+      const segs = await Promise.all(st.cams.map((c, i) => c.segment(s.uris[i])));
+      const out = st.merger.mergeSegment(segs, mergeOpts(t));
+      st.mergedCache.set(t, { slot: s, segs, out });
+      while (st.mergedCache.size > 12) st.mergedCache.delete(st.mergedCache.keys().next().value);
+    };
+    if (st.timeline.size && slots[0].id < Math.min(...st.timeline.keys())) {
+      st.timeline.clear(); st.anchored = false; st.bad.clear(); st.mergedCache.clear();
+      throw Object.assign(new Error('playlist voltou no tempo; reiniciando'), { status: 503 });
+    }
+    for (const s of slots) {
+      if (st.timeline.has(s.id)) continue;
+      if (!st.anchored) {
+        const t0 = firstDecodeTime(await st.cams[0].segment(s.uris[0]));
+        if (!(await tryAdd(s, t0))) continue;
+        st.anchored = true;
+        if (s.pdt !== null) st.asat = s.pdt - (t0 / ts) * 1000;
+        continue;
+      }
+      const prev = st.timeline.get(Math.max(...st.timeline.keys()));
+      await tryAdd(s, prev.t + prev.d);
+    }
+    // Janela atual: só o que ainda está na playlist e foi aceito; descarta o resto do histórico.
+    const win0 = slots.filter((s) => st.timeline.has(s.id));
+    if (!win0.length) throw new Error(st.lastError ? `nenhum segmento recente pôde ser costurado: ${st.lastError}` : 'nenhum segmento utilizável');
+    const ids = new Set(slots.map((s) => s.id));
+    for (const id of [...st.timeline.keys()]) if (!ids.has(id) && id < slots[0].id - 4) st.timeline.delete(id);
+    for (const id of [...st.bad]) if (id < slots[0].id - 20) st.bad.delete(id);
+
+    st.slotsByTime = new Map(win0.map((s) => [st.timeline.get(s.id).t, s]));
+    const win = win0.map((s) => ({ ...st.timeline.get(s.id) }));
     const winStart = win[0].t;
     const last = win[win.length - 1];
     if (live && st.asat === null) st.asat = Date.now() - ((last.t + last.d) / ts) * 1000;
@@ -215,6 +247,7 @@ export function createHlsSource(opts) {
     mergedInit: () => st.merger.init,
     camInit: () => st.cams[0].init,
     async mergedSegment(t) {
+      if (st.mergedCache.has(t)) return st.mergedCache.get(t);
       const slot = slotFor(t);
       const segs = await Promise.all(st.cams.map((c, i) => c.segment(slot.uris[i])));
       return { slot, segs, out: st.merger.mergeSegment(segs, st.offsets !== null ? { ignoreTime: true, baseTime: t } : {}) };

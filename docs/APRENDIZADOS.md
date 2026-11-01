@@ -171,3 +171,11 @@ mesma linha do Homebrew 26.07) tudo funcionou. Use a versão do Homebrew.
   o número de quadros e de IDR do último segmento, para ver se é GOP diferente, taxa de quadros diferente ou
   segmento com vários GOPs (esse último caso poderia ser resolvido recortando os segmentos em cada IDR; não
   implementado).
+- **GOP diferente nos canais trava o vídeo depois de alguns segundos.** O merge junta os quadros pela posição
+  dentro do segmento; se um canal tem um IDR/CRA no meio (ex.: segmento com 3 GOPs) e os outros não, o quadro
+  costurado mistura slices IDR e não-IDR (POC e referências diferentes): bitstream inválido, e o decoder trava
+  ao chegar nele. Agora o merge confere, quadro a quadro, tipo de NAL, POC, conjunto de referências e TMVP, e
+  recusa com o número do quadro e o motivo (em quadros só intra, onde os decoders toleram, só IDR contra
+  não-IDR é erro). Ao vivo, cada segmento é costurado e validado antes de entrar na lista: o ruim é descartado
+  (com aviso) em vez de parar o player; se todos falham, o erro diz por quê. Para canais com GOP de tamanhos
+  diferentes não há conserto no cliente: é preciso um GOP igual nos canais (rendição de multiview).
