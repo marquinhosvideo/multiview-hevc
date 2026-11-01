@@ -20,6 +20,11 @@ const store = {
 };
 proxyBox.checked = proxyOk && store.get('mv.proxy', true);
 $('#wpprow').addEventListener('change', invalidate);
+$('#lenient').addEventListener('change', invalidate);
+$('#fillIngest').addEventListener('click', () => {
+  inputs.forEach((inp, i) => { inp.value = `http://127.0.0.1:8082/ch${i + 1}/index.m3u8`; });
+  invalidate();
+});
 proxyBox.addEventListener('change', () => { store.set('mv.proxy', proxyBox.checked); invalidate(); });
 $('#rendition').value = store.get('mv.rendition', '540');
 $('#rendition').addEventListener('change', () => { store.set('mv.rendition', $('#rendition').value); invalidate(); });
@@ -75,7 +80,7 @@ $('#form').addEventListener('submit', async (e) => {
   checkBtn.disabled = true; invalidate();
 
   let d;
-  try { d = await diagnose(urls, { fetchBytes: fetcher(), segments: 3, sync: $('#indep').checked ? 'independent' : 'auto', rendition: $('#rendition').value, wppRow: $('#wpprow').checked }); }
+  try { d = await diagnose(urls, { fetchBytes: fetcher(), segments: 3, sync: $('#indep').checked ? 'independent' : 'auto', rendition: $('#rendition').value, wppRow: $('#wpprow').checked, lenient: $('#lenient').checked }); }
   catch (err) { d = { ok: false, checks: [{ kind: 'bad', msg: String(err && err.message || err) }] }; }
   checkBtn.disabled = false;
   $('#status').className = 'status';
@@ -112,5 +117,6 @@ playBtn.addEventListener('click', () => {
   const urls = inputs.map((i) => i.value.trim());
   const q = new URLSearchParams({ hls: urls.join(','), proxy: proxyBox.checked ? '1' : '0', sync: $('#indep').checked ? 'independent' : syncForPlay, rendition: $('#rendition').value });
   if ($('#wpprow').checked) q.set('wpprow', '1');
+  if ($('#lenient').checked) q.set('lenient', '1');
   location.href = `index.html?${q}`;
 });

@@ -210,6 +210,21 @@ em grade 2×2; com WPP, empilhados. O nível HEVC do canvas é elevado quando o 
 um nível menor que o necessário, e a janela de corte do SPS (544→540 linhas) é aplicada na
 hora de desenhar.
 
+**Canais com estrutura de compressão diferente: `make ingest`.** O merge exige que os 4 canais tenham a
+mesma estrutura (SPS/PPS, resolução, taxa de quadros, GOP quadro a quadro, sem TMVP, vetores dentro do
+quadro). Isso não se conserta editando o vídeo; só recodificando. O `make ingest` faz isso para canais ao vivo
+(HLS ou DASH): decodifica cada um, reduz para `TILE_W`x`TILE_H`, converte para `FPS` e recodifica com GOP fixo
+e fechado em segmentos de `SEG_DUR` s, publicando em `http://127.0.0.1:8082/ch1..ch4/index.m3u8`:
+
+```bash
+make ingest CH="https://.../canal1.m3u8 https://.../canal2.m3u8 https://.../canal3.m3u8 https://.../canal4.m3u8"
+make web-hls     # outro terminal: botão "Usar os canais recodificados"
+```
+
+Com o Kvazaar instalado (`make deps`), os vetores de movimento também ficam dentro do quadro (prova bit a
+bit possível). Sem ele cai no x265, que não restringe os vetores: a estrutura fica igual, mas pode haver
+artefatos junto às bordas dos tiles. O custo é CPU (4 decodes + 4 encodes em tempo real).
+
 **Interface web para colar os 4 streams:**
 
 ```bash

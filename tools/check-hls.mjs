@@ -20,6 +20,7 @@ const noDecode = args.includes('--no-decode'); if (noDecode) args.splice(args.in
 const nSeg = Number(opt('--segments', 3));
 const rendition = opt('--rendition', 'highest'); // highest | lowest | altura máxima (ex.: 540)
 const wppRow = args.includes('--wpp-row'); if (wppRow) args.splice(args.indexOf('--wpp-row'), 1);
+const lenient = args.includes('--ignore-gop'); if (lenient) args.splice(args.indexOf('--ignore-gop'), 1);
 const sync = opt('--sync', 'independent'); // independent (canais diferentes) | auto (câmeras sincronizadas)
 const urls = args;
 if (urls.length !== 2 && urls.length !== 4) {
@@ -31,7 +32,7 @@ const mark = { ok: '\x1b[32m✔\x1b[0m', warn: '\x1b[33m!\x1b[0m', bad: '\x1b[31
 const res = { bad: 0, warn: 0 };
 const say = (kind, msg) => { console.log(`${mark[kind]} ${msg}`); if (kind !== 'ok') res[kind]++; };
 
-const d = await diagnose(urls, { fetchBytes, segments: nSeg, sync, rendition, wppRow });
+const d = await diagnose(urls, { fetchBytes, segments: nSeg, sync, rendition, wppRow, lenient });
 if (!d.ok && !d.canvas) {
   for (const c of d.checks) say(c.kind, c.msg);
   console.log('\nVeredito: com estes streams o merge NÃO funciona como estão.');

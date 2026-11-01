@@ -2,7 +2,7 @@ SHELL := /bin/bash
 S := ./scripts
 
 .PHONY: help deps check sources encode merge verify offline control \
-        live-server live-play live-proof live-record verify-live web web-test hls-server web-hls check-hls hls-test open clean distclean
+        live-server live-play live-proof live-record verify-live web web-test hls-server web-hls check-hls hls-test ingest open clean distclean
 
 help:
 	@echo "POC multiview HEVC com tiles: 4 câmeras, 1 decode"
@@ -26,6 +26,7 @@ help:
 	@echo "  Fonte HLS (4 streams .m3u8, por exemplo do Elemental Live):"
 	@echo "  make check-hls HLS=\"url1 url2 url3 url4\"   diagnostica se os streams são mergeáveis (inclui prova bit a bit)"
 	@echo "  make hls-server    [terminal 1] publica as 4 câmeras locais como HLS ao vivo (HLS_FORMAT=ts para MPEG-TS)"
+	@echo "  make ingest CH=\"url1 url2 url3 url4\"   recodifica 4 canais ao vivo para o perfil mergeável (GOP igual) e publica como HLS local"
 	@echo "  make web-hls       [terminal 2] abre a página de entrada HLS: cole os 4 streams, verifique e toque"
 	@echo "  make hls-test      testa o caminho HLS (fMP4 e TS) sem navegador, bit a bit (precisa de Node 18+ e ffmpeg)"
 	@echo ""
@@ -54,6 +55,7 @@ web:         ; @$(S)/09_web.sh
 web-test:    ; @$(S)/10_web_test.sh
 
 hls-server:  ; @$(S)/11_hls_server.sh
+ingest:      ; @CH="$(CH)" $(S)/12_ingest.sh
 web-hls:     ; @LIVE_HLS=1 $(S)/09_web.sh
 check-hls:
 	@test -n "$(HLS)" || (echo 'uso: make check-hls HLS="url1 url2 url3 url4"' && exit 1)

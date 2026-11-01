@@ -8,14 +8,14 @@ import { createHlsSource } from './hls-source.js';
 import { parseCameraInit, initCodecString } from './hevc-merge.js';
 
 // -> { ok, error?, canvas, info, cams, checks:[{kind:'ok'|'warn'|'bad', msg}], merged, source }
-export async function diagnose(urls, { fetchBytes, segments = 3, sync = 'auto', rendition = 'highest', wppRow = false } = {}) {
+export async function diagnose(urls, { fetchBytes, segments = 3, sync = 'auto', rendition = 'highest', wppRow = false, lenient = false } = {}) {
   const checks = [];
   const add = (kind, msg) => checks.push({ kind, msg });
   const events = [];
   const source = createHlsSource({ fetchBytes, onEvent: (e) => events.push(e) });
 
   let m;
-  try { m = await source.refresh(urls, { sync, rendition, wppRow }); }
+  try { m = await source.refresh(urls, { sync, rendition, wppRow, lenient }); }
   catch (e) {
     add('bad', `não consegui montar o merge: ${e.message}`);
     return { ok: false, error: e.message, checks, source };
@@ -55,6 +55,7 @@ export async function diagnose(urls, { fetchBytes, segments = 3, sync = 'auto', 
   } else if (source.state.merger && source.state.merger.wpp) {
     add('warn', 'WPP ligado nos canais: mantive o WPP e empilhei os tiles na vertical (1 coluna), porque tiles lado a lado + WPP quebra o decode. Tiles + WPP no mesmo stream é raro e alguns decoders de hardware recusam; se o vídeo não tocar, desligue o WPP no encoder');
   }
+  if (lenient) add('warn', 'validação de GOP desligada: se os canais tiverem estrutura de quadros diferente, o vídeo mergeado é inválido e o decoder pode travar ou corromper a imagem');
   const times = [...source.state.slotsByTime.keys()].slice(-segments);
   const merged = [];
   for (const t of times) {

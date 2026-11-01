@@ -179,3 +179,10 @@ mesma linha do Homebrew 26.07) tudo funcionou. Use a versão do Homebrew.
   não-IDR é erro). Ao vivo, cada segmento é costurado e validado antes de entrar na lista: o ruim é descartado
   (com aviso) em vez de parar o player; se todos falham, o erro diz por quê. Para canais com GOP de tamanhos
   diferentes não há conserto no cliente: é preciso um GOP igual nos canais (rendição de multiview).
+- **Recodificar é o único jeito de igualar a estrutura.** `scripts/12_ingest.sh` (make ingest) recodifica
+  4 canais ao vivo com o contrato do 02_encode.sh. Testado com 4 fontes de estruturas diferentes (P com
+  keyint 60 e 30, e B-frames): antes, o SPS/PPS já diferia; depois, SPS/PPS idênticos, TMVP desligado e a
+  validação quadro a quadro passa nos segmentos costurados. Com x265 os vetores de movimento não são
+  restritos (só o Kvazaar tem `--mv-constraint`), então a prova bit a bit pode apontar divergência nas
+  bordas. Opção `Ignorar diferenças de GOP` na página: desliga a validação, mas com estruturas diferentes
+  o vídeo trava ou corrompe (foi o sintoma antes da validação existir).

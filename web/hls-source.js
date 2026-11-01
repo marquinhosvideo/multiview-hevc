@@ -78,7 +78,7 @@ export function createHlsSource(opts) {
   const { fetchBytes, presentationDelay = 6, onEvent = () => {} } = opts;
   const io = { fetchBytes, cached: makeCache(fetchBytes), rendition: () => st.rendition };
   const PREMERGE = 6; // quantos segmentos recentes são costurados (e validados) a cada atualização, ao vivo
-  const st = { bad: new Set(), mergedCache: new Map(), lastError: '', skipped: 0, allowWppRow: false, rendition: 'highest', sync: null, offsets: null, cams: [], merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map(), info: null };
+  const st = { lenient: false, bad: new Set(), mergedCache: new Map(), lastError: '', skipped: 0, allowWppRow: false, rendition: 'highest', sync: null, offsets: null, cams: [], merger: null, mergerKey: '', timeline: new Map(), asat: null, anchored: false, slotsByTime: new Map(), info: null };
 
   // Mensagem para quando nenhum par de segmentos tem a mesma duração: mostra, por canal, o que cada um faz.
   async function explainDurations(lists) {
@@ -98,7 +98,8 @@ export function createHlsSource(opts) {
   }
 
   // Relê as playlists e devolve o MPD virtual do canvas (ou de uma câmera só).
-  async function refresh(urls, { single = false, sync = 'auto', rendition = 'highest', wppRow = false } = {}) {
+  async function refresh(urls, { single = false, sync = 'auto', rendition = 'highest', wppRow = false, lenient = false } = {}) {
+    st.lenient = !!lenient;
     if (st.allowWppRow !== !!wppRow) { st.allowWppRow = !!wppRow; st.merger = null; }
     if (st.rendition !== String(rendition)) { st.rendition = String(rendition); st.cams = []; }
     if (st.cams.length !== urls.length || st.cams.some((c, i) => c.url !== urls[i])) {
@@ -163,7 +164,7 @@ export function createHlsSource(opts) {
     const premerge = live && !single;
     let slots = aligned.slots;
     if (premerge) slots = slots.slice(-PREMERGE);
-    const mergeOpts = (t) => (st.offsets !== null ? { ignoreTime: true, baseTime: t } : {});
+    const mergeOpts = (t) => ({ ...(st.offsets !== null ? { ignoreTime: true, baseTime: t } : {}), skipStructure: st.lenient });
     const tryAdd = async (s, t) => {
       if (premerge) {
         if (st.bad.has(s.id)) return false;
@@ -250,7 +251,7 @@ export function createHlsSource(opts) {
       if (st.mergedCache.has(t)) return st.mergedCache.get(t);
       const slot = slotFor(t);
       const segs = await Promise.all(st.cams.map((c, i) => c.segment(slot.uris[i])));
-      return { slot, segs, out: st.merger.mergeSegment(segs, st.offsets !== null ? { ignoreTime: true, baseTime: t } : {}) };
+      return { slot, segs, out: st.merger.mergeSegment(segs, { ...(st.offsets !== null ? { ignoreTime: true, baseTime: t } : {}), skipStructure: st.lenient }) };
     },
     async camSegment(t) {
       const slot = slotFor(t);

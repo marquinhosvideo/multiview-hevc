@@ -680,6 +680,7 @@ export function inspectSegment(bytes) {
   return { frames: f.samples.length, irap, ticks: f.samples.reduce((a, x) => a + x.dur, 0) };
 }
 
+// opts.skipStructure: não confere tipo de quadro/POC/RPS entre as câmeras (GOPs diferentes costuram quadros inválidos).
 // opts.baseTime: força o tfdt da saída (modo independente: o tempo é o do manifesto, não o de nenhuma câmera).
 // opts.ignoreTime: câmeras independentes têm origens de tempo diferentes (tfdt); a saída usa o
 // tempo da câmera 1 e os quadros são pareados por posição. A contagem de quadros ainda tem de bater.
@@ -760,7 +761,7 @@ function mergeSegment(cams, tiles, addrBits, segments, opts = {}) {
         const len = new Uint8Array(4); writeU32(len, 0, nal.length);
         parts.push(len, nal);
       });
-      checkSameStructure(metas, i);
+      if (!opts.skipStructure) checkSameStructure(metas, i);
       return concat(parts);
     });
 
